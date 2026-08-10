@@ -1,0 +1,34 @@
+import { Queue } from 'bullmq';
+import IORedis from 'ioredis';
+import 'dotenv/config';
+
+// Redis backs the BullMQ job queue for the scan pipeline — not used as a
+// cache. This is the piece a pure cron model (the earlier Supabase/GitHub
+// Actions build) had no natural home for: retries on failed channel calls,
+// backpressure as merchant volume grows, and visibility into what's
+// mid-flight. See README "Why Railway" for the full rationale (Charles's
+// reasoning, provisional pending Steve's sign-off on the ops side).
+
+if (!process.env.REDIS_URL) {
+  console.warn(
+    '[queue] REDIS_URL not set — fine for `npm run enqueue:dry`, ' +
+      'required for the worker/scheduler to actually run jobs.'
+  );
+}
+
+export const connection = new IORedis(process.env.REDIS_URL, {
+  maxRetriesPerRequest: null, // required by BullMQ
+});
+
+export const SCAN_QUEUE_NAME = 'scan-jobs';
+
+export const scanQueue = new Queue(SCAN_QUEUE_NAME, { connection });
+
+// One job = one (query, channel) pair. Kept small and granular on purpose:
+// BullMQ retries/backpressure/concurrency all operate at the job level, so
+// the finer-grained the job, the more useful those mechanics are. A failed
+// Perplexity call for one query shouldn't block or retry the other two
+// channels for that same query.
+export function scanJobId({ scanId, queryId, channel }) {
+  return `${scanId}:${queryId}:${channel}`;
+}
