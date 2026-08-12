@@ -61,7 +61,8 @@ create table if not exists queries (
   source          text not null default 'seed' check (source in ('seed', 'merchant_custom')),
   active          boolean not null default true,
   notes           text,
-  created_at      timestamptz not null default now()
+  created_at      timestamptz not null default now(),
+  unique (subcategory_id, query_text)
 );
 
 create index if not exists idx_queries_subcategory on queries(subcategory_id);

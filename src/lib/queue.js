@@ -6,8 +6,8 @@ import 'dotenv/config';
 // cache. This is the piece a pure cron model (the earlier Supabase/GitHub
 // Actions build) had no natural home for: retries on failed channel calls,
 // backpressure as merchant volume grows, and visibility into what's
-// mid-flight. See README "Why Railway" for the full rationale (Charles's
-// reasoning, provisional pending Steve's sign-off on the ops side).
+// mid-flight. See README "Why Railway" for the full rationale — confirmed
+// architecture, not provisional.
 
 if (!process.env.REDIS_URL) {
   console.warn(

@@ -9,7 +9,8 @@
     "scheduler": "node src/scheduler.js",
     "enqueue": "node src/scripts/enqueuePoolRun.js",
     "enqueue:dry": "DRY_RUN=true node src/scripts/enqueuePoolRun.js",
-    "migrate": "node src/scripts/migrate.js"
+    "migrate": "node src/scripts/migrate.js",
+    "dedupe": "node src/scripts/dedupe.js"
   },
   "engines": {
     "node": ">=18.17"

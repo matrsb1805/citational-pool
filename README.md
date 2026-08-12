@@ -129,9 +129,12 @@ DB-driven schedule table) at that point, not stay a single cron expression.
 ## Setup
 
 1. **Railway**: create a project, add a **Postgres** service and a **Redis**
-   service. Railway injects `DATABASE_URL` and `REDIS_URL` automatically into
-   any other service in the same project — you generally won't need to set
-   these by hand except for local dev.
+   service. Then, in each other service that needs them (worker, scheduler),
+   go to that service's **Variables** tab and add a *reference variable* —
+   type `DATABASE_URL` as the name, and for the value use Railway's
+   autocomplete (type `$`) to select `${{Postgres.DATABASE_URL}}`. Do the
+   same for `REDIS_URL` → `${{Redis.REDIS_URL}}`. This isn't fully automatic
+   — it's one dropdown pick per variable per service, not a raw copy-paste.
 2. Add **two more Railway services** from this repo, each with its own start
    command:
    - `npm run worker` — the persistent worker

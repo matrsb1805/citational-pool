@@ -53,7 +53,8 @@ from sc, (values
   ('best skincare gift set under $50', 'purchase_intent', null),
   ('where to buy clean beauty skincare online', 'purchase_intent', null),
   ('best affordable dupe for La Mer moisturiser', 'purchase_intent', null)
-) as q(query_text, query_type, target_brands);
+) as q(query_text, query_type, target_brands)
+on conflict (subcategory_id, query_text) do nothing;
 
 -- ----------------------------------------------------------------------------
 -- Skincare & Beauty — Serums & Treatments (15)
@@ -77,7 +78,8 @@ from sc, (values
   ('Tatcha vs Sunday Riley serum', 'brand_vs_competitor', array['Tatcha','Sunday Riley']),
   ('cruelty-free skincare brands worth buying', 'purchase_intent', null),
   ('best skincare brand for teenagers with acne', 'purchase_intent', null)
-) as q(query_text, query_type, target_brands);
+) as q(query_text, query_type, target_brands)
+on conflict (subcategory_id, query_text) do nothing;
 
 -- ----------------------------------------------------------------------------
 -- Supplements — Vitamins & Minerals (11)
@@ -97,7 +99,8 @@ from sc, (values
   ('Ritual vs Care/of multivitamin', 'brand_vs_competitor', array['Ritual','Care/of']),
   ('best supplement brand that''s NSF certified', 'purchase_intent', null),
   ('best supplements for a first-time buyer starter stack', 'purchase_intent', null)
-) as q(query_text, query_type, target_brands);
+) as q(query_text, query_type, target_brands)
+on conflict (subcategory_id, query_text) do nothing;
 
 -- ----------------------------------------------------------------------------
 -- Supplements — Protein & Performance (9)
@@ -115,7 +118,8 @@ from sc, (values
   ('Momentous vs Optimum Nutrition creatine', 'brand_vs_competitor', array['Momentous','Optimum Nutrition']),
   ('cheapest place to buy creatine monohydrate', 'purchase_intent', null),
   ('best subscription supplement service', 'purchase_intent', null)
-) as q(query_text, query_type, target_brands);
+) as q(query_text, query_type, target_brands)
+on conflict (subcategory_id, query_text) do nothing;
 
 -- ----------------------------------------------------------------------------
 -- Activewear — Leggings & Bottoms (6)
@@ -130,7 +134,8 @@ from sc, (values
   ('Lululemon vs Alo Yoga leggings', 'brand_vs_competitor', array['Lululemon','Alo Yoga']),
   ('best affordable dupe for Lululemon leggings', 'purchase_intent', null),
   ('where to buy plus size activewear online', 'purchase_intent', null)
-) as q(query_text, query_type, target_brands);
+) as q(query_text, query_type, target_brands)
+on conflict (subcategory_id, query_text) do nothing;
 
 -- ----------------------------------------------------------------------------
 -- Activewear — Tops & Outerwear (9)
@@ -148,4 +153,5 @@ from sc, (values
   ('Gymshark vs Nike training shorts', 'brand_vs_competitor', array['Gymshark','Nike']),
   ('best activewear brand for hot yoga', 'purchase_intent', null),
   ('best sustainable activewear brands', 'purchase_intent', null)
-) as q(query_text, query_type, target_brands);
+) as q(query_text, query_type, target_brands)
+on conflict (subcategory_id, query_text) do nothing;
