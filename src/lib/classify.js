@@ -16,22 +16,32 @@
 // claim-extraction pipeline described in the SDX:VibeEvidence work — spot
 // check output against raw_response before trusting it at scale.
 //
-// STATUS: prompt has been checked against exactly one real transcript so
-// far (see project history) — worth spot-checking a handful more before
-// trusting this at any volume.
+// STATUS: revised after a real test caught the classifier confusing cited
+// source publishers (e.g. a hospital's blog) with actual product brands.
+// Spot-checked against 3 real transcripts total as of this revision — worth
+// checking a few more, especially educational/non-commercial answers, before
+// trusting this at volume.
 
 import 'dotenv/config';
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
-const SYSTEM_PROMPT = `You extract which specific product brands are recommended or cited in an AI assistant's answer to a shopper question.
+const SYSTEM_PROMPT = `You extract which specific product/company brands are recommended or cited in an AI assistant's answer to a shopper question.
+
+Only consider brands that are discussed IN THE ANSWER TEXT ITSELF as a product or company the shopper could actually buy from — e.g. "CeraVe" or "Vanicream" being suggested as an option.
+
+Do NOT extract a name just because it appears as the source/publisher of a cited link (e.g. "Healthline", "Nebraska Medicine", "Greenwood Pharmacy" showing up as where information was found, not as a product being recommended). A publication, hospital system, blog, or review site cited as an information source is never itself a brand for this purpose — even if it also happens to sell something — unless the answer text is actually recommending buying from them specifically.
+
+Many correct answers will have NO brands at all — general educational answers (e.g. explaining a chemical, a category, a how-to) legitimately have empty lists. Don't force a brand into the output just because the transcript cites sources.
 
 Rules:
-- recommended_brands: real company/brand names the assistant is actively suggesting or endorsing as an answer to the question. Brand names only, never product names (e.g. "CeraVe", not "CeraVe Moisturizing Cream").
-- cited_brands: brand names that appear in the answer (e.g. in a comparison, a source link, a passing mention) but are NOT being actively recommended. A brand should never appear in both lists — if it's recommended, it only belongs in recommended_brands.
-- Only include brands you're confident are real companies. Do not invent one.
+- recommended_brands: brand names the assistant is actively suggesting/endorsing as an answer to the shopper's question.
+- cited_brands: brand names discussed or compared in the answer, but not actively recommended.
+- A brand should never appear in both lists.
+- Only include brands you're confident are real, purchasable product/company brands — never publishers, review sites, hospitals, or news outlets cited only as information sources.
+- Brand names only, never specific product names (e.g. "CeraVe", not "CeraVe Moisturizing Cream").
 - Use the brand's standard public name and capitalization (e.g. "CeraVe", "The Ordinary", "La Roche-Posay").
-- Respond with ONLY a JSON object: {"recommended_brands": [...], "cited_brands": [...]}. No other text. Empty arrays are correct when no brands appear.`;
+- Respond with ONLY a JSON object: {"recommended_brands": [...], "cited_brands": [...]}. No other text. Empty arrays are correct and expected for many answers.`;
 
 export async function classifyResult({ transcript, references }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -45,9 +55,11 @@ export async function classifyResult({ transcript, references }) {
     .join('\n');
 
   const userMessage = [
-    'Assistant transcript:',
+    'Assistant transcript (this is the primary text to analyze):',
     transcript,
-    referencesBlock ? `\nReferences / citations:\n${referencesBlock}` : '',
+    referencesBlock
+      ? `\nCited source links (these are where the assistant found its information — do NOT treat these domains/publishers as brands unless that same name is also substantively discussed as a product/company in the transcript above):\n${referencesBlock}`
+      : '',
   ].join('\n');
 
   const res = await fetch(ANTHROPIC_URL, {
