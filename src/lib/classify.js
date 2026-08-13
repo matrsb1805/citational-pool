@@ -1,38 +1,43 @@
 // Classification pass: takes a channel transcript + reference list and
-// produces the query_results.state / competitor_brand fields via Claude.
+// extracts which brands the AI's answer actually recommended vs. merely
+// mentioned/cited — with NO target brand involved. Earlier versions of this
+// file compared against a single "target brand," which only makes sense
+// once a specific merchant exists (Phase 2). In Phase 1's shared pool,
+// there is no merchant yet, so forcing a target brand meant silently
+// defaulting to whichever brand happened to be listed first in
+// brands.json — which produced a real, confusing bug (see commit history /
+// README). Extracting the raw fact — which brands were recommended, which
+// were cited — instead of a single-brand comparison is also a *stronger*
+// version of the shared-pool cost story: "was CeraVe recommended" becomes a
+// free lookup against already-stored data for any brand, anytime, rather
+// than something that has to be decided again per merchant.
 //
-// This replaces the old regex + brands.json lookup from the earlier build.
-// It's a genuine step up (handles paraphrase, negation, "X but not Y" cases
-// a regex can't), but it is still an LLM classification pass over free text,
-// not the NLP claim-extraction pipeline described in the SDX:VibeEvidence
-// work. Treat state/competitor_brand as a good-enough signal for validating
-// pool mechanics, not as guaranteed-accurate structured data — spot-check
-// classify.js output against raw_response before trusting frequency numbers.
+// This is still an LLM classification pass over free text, not the NLP
+// claim-extraction pipeline described in the SDX:VibeEvidence work — spot
+// check output against raw_response before trusting it at scale.
 //
-// STATUS: UNVERIFIED — prompt is untested against real transcripts (no
-// channel calls were run live in this build session, so there's no real
-// transcript to test classification against yet).
+// STATUS: prompt has been checked against exactly one real transcript so
+// far (see project history) — worth spot-checking a handful more before
+// trusting this at any volume.
 
 import 'dotenv/config';
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
-const SYSTEM_PROMPT = `You classify whether an AI assistant's answer to a shopper question recommends or cites a specific target brand, and if a competitor brand is more prominent instead.
+const SYSTEM_PROMPT = `You extract which specific product brands are recommended or cited in an AI assistant's answer to a shopper question.
 
 Rules:
-- state must be exactly one of: recommended, cited, not_listed
-  - recommended: the target brand is actively suggested/endorsed as an answer to the question
-  - cited: the target brand is named or referenced (e.g. in a comparison, a source link, a passing mention) but not the assistant's actual recommendation
-  - not_listed: the target brand does not appear at all
-- competitor_brand: if a DIFFERENT brand is the one actually recommended, or is the most prominent brand mentioned, return its name. Brand name only — never a specific product name. If no clear single competitor stands out, or the target brand itself is the one recommended, return null.
-- Only use brand names that plausibly refer to real companies. Do not invent one.
-- Respond with ONLY a JSON object: {"state": "...", "competitor_brand": "..." | null}. No other text.`;
+- recommended_brands: real company/brand names the assistant is actively suggesting or endorsing as an answer to the question. Brand names only, never product names (e.g. "CeraVe", not "CeraVe Moisturizing Cream").
+- cited_brands: brand names that appear in the answer (e.g. in a comparison, a source link, a passing mention) but are NOT being actively recommended. A brand should never appear in both lists — if it's recommended, it only belongs in recommended_brands.
+- Only include brands you're confident are real companies. Do not invent one.
+- Use the brand's standard public name and capitalization (e.g. "CeraVe", "The Ordinary", "La Roche-Posay").
+- Respond with ONLY a JSON object: {"recommended_brands": [...], "cited_brands": [...]}. No other text. Empty arrays are correct when no brands appear.`;
 
-export async function classifyResult({ targetBrand, transcript, references }) {
+export async function classifyResult({ transcript, references }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
   if (!transcript) {
-    return { state: 'not_listed', competitor_brand: null };
+    return { recommended_brands: [], cited_brands: [] };
   }
 
   const referencesBlock = (references || [])
@@ -40,8 +45,6 @@ export async function classifyResult({ targetBrand, transcript, references }) {
     .join('\n');
 
   const userMessage = [
-    `Target brand: ${targetBrand}`,
-    '',
     'Assistant transcript:',
     transcript,
     referencesBlock ? `\nReferences / citations:\n${referencesBlock}` : '',
@@ -56,7 +59,7 @@ export async function classifyResult({ targetBrand, transcript, references }) {
     },
     body: JSON.stringify({
       model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
-      max_tokens: 200,
+      max_tokens: 300,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage }],
     }),
@@ -76,16 +79,8 @@ export async function classifyResult({ targetBrand, transcript, references }) {
     throw new Error(`classify.js: could not parse model output as JSON: ${text}`);
   }
 
-  if (!['recommended', 'cited', 'not_listed'].includes(parsed.state)) {
-    throw new Error(`classify.js: unexpected state value: ${parsed.state}`);
-  }
-
-  // Brand-level normalisation enforcement: the schema/product spec require
-  // competitor_brand to always be brand-level, never a product name. The
-  // prompt already instructs this; this is a defensive backstop, not the
-  // primary control.
   return {
-    state: parsed.state,
-    competitor_brand: parsed.competitor_brand || null,
+    recommended_brands: Array.isArray(parsed.recommended_brands) ? parsed.recommended_brands : [],
+    cited_brands: Array.isArray(parsed.cited_brands) ? parsed.cited_brands : [],
   };
 }

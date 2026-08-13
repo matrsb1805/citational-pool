@@ -61,6 +61,26 @@ the settled architecture for the scan pipeline, not a provisional choice.
 The reasoning above is kept in full because it's the actual rationale and
 worth having on hand, not because the decision is still open.
 
+## Changelog note — brand-list redesign (v2)
+
+Early real-world testing surfaced a genuine design bug: `query_results`
+originally stored a single `state` + `competitor_brand` pair, which only
+makes sense relative to one specific brand. Phase 1 has no merchant yet to
+be that brand, so the code silently defaulted to whichever brand happened to
+be listed first in `brands.json` — which produced a confusing, sometimes
+self-contradictory result (a brand being both the implied "target" and its
+own "competitor" in the same row).
+
+Fixed by replacing those two columns with `recommended_brands` and
+`cited_brands` — the raw fact of which brands an answer recommended vs.
+merely mentioned, with no target brand baked in at collection time. "Was
+brand X recommended" becomes a free lookup against already-stored data for
+any brand, computed whenever it's actually needed (e.g. per-merchant in
+Phase 2), via the `brand_mentions` view in `db/schema.sql`. If you're
+picking up a database that already ran the old schema, apply
+`npm run migrate:v2` once (see Setup) before the new code will work against
+it.
+
 ## What this is
 
 - Postgres schema matching the Summary doc's data model: `categories` →
@@ -106,9 +126,7 @@ worth having on hand, not because the decision is still open.
 NLP claim-extraction pipeline described in the SDX:VibeEvidence work. It's a
 real improvement on the old regex + `brands.json` approach — it handles
 paraphrase and negation a regex can't — but it should still be spot-checked
-against `query_results.raw_response` before trusting frequency numbers, and
-it hasn't been tested against a single real transcript yet (no channel calls
-were run live in this build session).
+against `query_results.raw_response` before trusting frequency numbers.
 
 ## Phase 1 vs Phase 2 — what `scans` means right now
 

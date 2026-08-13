@@ -16,7 +16,7 @@ export async function enqueuePoolRun({ dryRun = false, maxQueries = 0 } = {}) {
 
   for (const category of categories) {
     const { rows: queries } = await query(
-      `select q.id, q.query_text, q.target_brands
+      `select q.id, q.query_text
        from queries q
        join subcategories sc on sc.id = q.subcategory_id
        where sc.category_id = $1 and q.active = true
@@ -41,11 +41,10 @@ export async function enqueuePoolRun({ dryRun = false, maxQueries = 0 } = {}) {
     const scanId = await createPoolScan(category.id);
 
     for (const q of capped) {
-      const targetBrand = q.target_brands?.[0] || null;
       for (const channel of CHANNELS) {
         await scanQueue.add(
           'scan',
-          { scanId, queryId: q.id, channel, queryText: q.query_text, targetBrand },
+          { scanId, queryId: q.id, channel, queryText: q.query_text },
           {
             jobId: scanJobId({ scanId, queryId: q.id, channel }),
             attempts: 3,

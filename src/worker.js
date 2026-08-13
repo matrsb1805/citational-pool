@@ -11,15 +11,6 @@ import { queryGoogleAiMode } from './lib/channels/googleAiMode.js';
 import { queryChatGPT } from './lib/channels/chatgpt.js';
 import { queryPerplexity } from './lib/channels/perplexity.js';
 import { classifyResult } from './lib/classify.js';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-// Plain fs read rather than a JSON import assertion — the `with { type:
-// "json" }` syntax needs Node 20.10+; readFileSync works on the 18.17+
-// floor declared in package.json engines.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const brands = JSON.parse(readFileSync(path.join(__dirname, 'lib', 'brands.json'), 'utf8'));
 
 const CHANNEL_FNS = {
   google_ai_mode: queryGoogleAiMode,
@@ -28,7 +19,7 @@ const CHANNEL_FNS = {
 };
 
 async function processJob(job) {
-  const { scanId, queryId, channel, queryText, targetBrand } = job.data;
+  const { scanId, queryId, channel, queryText } = job.data;
 
   const channelFn = CHANNEL_FNS[channel];
   if (!channelFn) throw new Error(`Unknown channel: ${channel}`);
@@ -43,21 +34,20 @@ async function processJob(job) {
     throw new Error(`[${channel}] channel call failed: ${err.message}`);
   }
 
-  let classification = { state: null, competitor_brand: null };
+  let classification = { recommended_brands: [], cited_brands: [] };
   try {
     classification = await classifyResult({
-      targetBrand: targetBrand || Object.keys(brands)[0],
       transcript: result.transcript,
       references: result.references,
     });
   } catch (err) {
     // Classification failure shouldn't lose the raw response — store it
-    // with a null state and the error, so it can be re-classified later
-    // without re-calling the (paid) channel API.
+    // with empty brand lists and the error, so it can be re-classified
+    // later without re-calling the (paid) channel API.
     await query(
       `insert into query_results
-         (scan_id, query_id, channel, state, competitor_brand, raw_response, cost_usd, error)
-       values ($1, $2, $3, null, null, $4, $5, $6)`,
+         (scan_id, query_id, channel, recommended_brands, cited_brands, raw_response, cost_usd, error)
+       values ($1, $2, $3, '{}', '{}', $4, $5, $6)`,
       [scanId, queryId, channel, result.raw_response, result.cost_usd, `classify: ${err.message}`]
     );
     return;
@@ -65,14 +55,14 @@ async function processJob(job) {
 
   await query(
     `insert into query_results
-       (scan_id, query_id, channel, state, competitor_brand, raw_response, cost_usd)
+       (scan_id, query_id, channel, recommended_brands, cited_brands, raw_response, cost_usd)
      values ($1, $2, $3, $4, $5, $6, $7)`,
     [
       scanId,
       queryId,
       channel,
-      classification.state,
-      classification.competitor_brand,
+      classification.recommended_brands,
+      classification.cited_brands,
       result.raw_response,
       result.cost_usd,
     ]

@@ -106,33 +106,38 @@ create index if not exists idx_scans_category on scans(category_id);
 
 -- ----------------------------------------------------------------------------
 -- query_results: atomic unit. One row per query per channel per scan.
--- state replaces the old boolean brand_mentions extraction — three-state per
--- Summary doc Section 4.
--- competitor_brand: brand name only, never a product name, and must already
--- be normalised to brand-level by the classification pass (src/lib/classify.js)
--- before it lands here — the tier boundary (Free sees category-level; who's
----beating-you rollup gated on state, not tier, per Summary doc Section 5) is
--- enforced server-side against this column, not trusted to the frontend.
--- raw_response is kept in full regardless of state/competitor_brand parsing,
--- so re-classification is always possible without re-querying the channel.
+--
+-- recommended_brands / cited_brands (v2 — replaced a single state +
+-- competitor_brand pair): "was brand X recommended/cited" only makes sense
+-- relative to ONE specific brand, but Phase 1 has no merchant yet to be that
+-- brand — forcing one anyway (the original version defaulted to whichever
+-- brand was listed first in brands.json) produced silently wrong results.
+-- Storing the raw fact — which brands the answer actually recommended vs.
+-- merely mentioned — means "was CeraVe recommended" becomes a free lookup
+-- against already-stored data for ANY brand, computed per-merchant later,
+-- rather than a decision baked in at collection time. See brand_mentions
+-- view below for how to query this.
+-- raw_response is kept in full regardless of parsing, so re-classification
+-- is always possible without re-querying the channel.
 -- ----------------------------------------------------------------------------
 create table if not exists query_results (
-  id                uuid primary key default gen_random_uuid(),
-  scan_id           uuid not null references scans(id) on delete cascade,
-  query_id          uuid not null references queries(id) on delete cascade,
-  channel           text not null check (channel in ('chatgpt', 'google_ai_mode', 'perplexity')),
-  state             text check (state in ('recommended', 'cited', 'not_listed')),
-  competitor_brand  text,
-  raw_response      jsonb,
-  cost_usd          numeric(10, 5),
-  fetched_at        timestamptz not null default now(),
-  error             text
+  id                  uuid primary key default gen_random_uuid(),
+  scan_id             uuid not null references scans(id) on delete cascade,
+  query_id            uuid not null references queries(id) on delete cascade,
+  channel             text not null check (channel in ('chatgpt', 'google_ai_mode', 'perplexity')),
+  recommended_brands  text[] not null default '{}',
+  cited_brands        text[] not null default '{}',
+  raw_response        jsonb,
+  cost_usd            numeric(10, 5),
+  fetched_at          timestamptz not null default now(),
+  error               text
 );
 
 create index if not exists idx_results_scan on query_results(scan_id);
 create index if not exists idx_results_query on query_results(query_id);
 create index if not exists idx_results_channel on query_results(channel);
-create index if not exists idx_results_competitor on query_results(lower(competitor_brand));
+create index if not exists idx_results_recommended_brands on query_results using gin(recommended_brands);
+create index if not exists idx_results_cited_brands on query_results using gin(cited_brands);
 
 -- ----------------------------------------------------------------------------
 -- subscriptions: billing state per shop. Empty in Phase 1. reconciled_at
@@ -153,53 +158,52 @@ create table if not exists subscriptions (
 );
 
 -- ----------------------------------------------------------------------------
--- brand_inclusion_frequency: core "AI inclusion %" metric, rebuilt for the
--- 3-state model. A query counts as "included" if state is recommended or
--- cited for the target brand's own results (this view reports per-category
--- state distribution across channels; per-brand attribution for the shop's
--- OWN brand happens at the application layer via shops.target_brand, since
--- state here describes the result of a query, not a specific brand row).
+-- brand_mentions: unnests recommended_brands/cited_brands into one row per
+-- (result, brand, mention_type). Every downstream question — "was CeraVe
+-- recommended," "who's beating CeraVe," a category-wide leaderboard — is a
+-- filter/group-by against this view, for any brand, computed at query time.
+-- No target brand is baked in anywhere upstream of this.
+--
+-- Example — is a given brand recommended, and how often, in a category:
+--   select count(*) filter (where mention_type = 'recommended')
+--   from brand_mentions
+--   where brand = 'CeraVe' and category_slug = 'skincare-beauty';
+--
+-- Example — "who's beating me" (Summary doc Section 5), for a given brand:
+--   select brand, mention_type, count(*)
+--   from brand_mentions
+--   where category_slug = 'skincare-beauty' and brand <> 'CeraVe'
+--   group by brand, mention_type
+--   order by count(*) desc;
 -- ----------------------------------------------------------------------------
-create or replace view category_state_distribution as
+create or replace view brand_mentions as
 select
-  c.slug                              as category_slug,
+  qr.id           as query_result_id,
+  qr.scan_id,
+  qr.query_id,
   qr.channel,
-  qr.state,
-  count(*)                            as result_count,
-  round(100.0 * count(*) filter (where qr.state in ('recommended', 'cited'))
-    over (partition by c.slug, qr.channel) / nullif(count(*) over (partition by c.slug, qr.channel), 0), 1)
-                                       as inclusion_pct_in_channel
-from scans s
-join categories c on c.id = s.category_id
-join query_results qr on qr.scan_id = s.id
-where s.status = 'complete'
-group by c.slug, qr.channel, qr.state;
-
--- ----------------------------------------------------------------------------
--- competitor_rollup: "who's beating you" — Summary doc Section 5. Gated on
--- state (only shown when state is cited or not_listed) at the query layer
--- that reads this, not baked into the view itself.
--- ----------------------------------------------------------------------------
-create or replace view competitor_rollup as
-select
-  c.slug             as category_slug,
-  sc.slug            as subcategory_slug,
-  qr.competitor_brand,
-  qr.state,
-  count(*)           as mention_count
-from scans s
-join categories c on c.id = s.category_id
-join query_results qr on qr.scan_id = s.id
+  s.status        as scan_status,
+  q.subcategory_id,
+  sc.slug         as subcategory_slug,
+  c.id            as category_id,
+  c.slug          as category_slug,
+  m.brand,
+  m.mention_type
+from query_results qr
 join queries q on q.id = qr.query_id
 join subcategories sc on sc.id = q.subcategory_id
-where s.status = 'complete'
-  and qr.competitor_brand is not null
-group by c.slug, sc.slug, qr.competitor_brand, qr.state;
+join categories c on c.id = sc.category_id
+join scans s on s.id = qr.scan_id
+cross join lateral (
+  select unnest(qr.recommended_brands) as brand, 'recommended' as mention_type
+  union all
+  select unnest(qr.cited_brands) as brand, 'cited' as mention_type
+) m;
 
 comment on table categories is 'Flagship categories (e.g. skincare/beauty)';
 comment on table subcategories is 'Subcategories within a category — supports partial rollout without schema change';
 comment on table queries is 'Shared query pool, hung off subcategory, ranked by search_volume';
 comment on table shops is 'Shopify merchants — empty in Phase 1';
 comment on table scans is 'Snapshot run over a category; shop_id null = pool-level run (Phase 1)';
-comment on table query_results is 'Atomic result: one row per query per channel per scan, 3-state';
+comment on table query_results is 'Atomic result: one row per query per channel per scan; brand mentions as raw lists, no target brand baked in';
 comment on table subscriptions is 'Billing state per shop — empty in Phase 1';
