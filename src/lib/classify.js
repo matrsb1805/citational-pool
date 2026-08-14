@@ -17,10 +17,12 @@
 // check output against raw_response before trusting it at scale.
 //
 // STATUS: revised after a real test caught the classifier confusing cited
-// source publishers (e.g. a hospital's blog) with actual product brands.
-// Spot-checked against 3 real transcripts total as of this revision — worth
-// checking a few more, especially educational/non-commercial answers, before
-// trusting this at volume.
+// source publishers (e.g. a hospital's blog) with actual product brands,
+// and again after a real failure caught the model wrapping valid JSON in
+// markdown code fences despite being told not to. Spot-checked against a
+// handful of real transcripts as of this revision — worth checking more,
+// especially educational/non-commercial answers, before trusting this at
+// volume.
 
 import 'dotenv/config';
 
@@ -86,7 +88,7 @@ export async function classifyResult({ transcript, references }) {
 
   let parsed;
   try {
-    parsed = JSON.parse(text.trim());
+    parsed = JSON.parse(stripCodeFences(text));
   } catch {
     throw new Error(`classify.js: could not parse model output as JSON: ${text}`);
   }
@@ -95,4 +97,15 @@ export async function classifyResult({ transcript, references }) {
     recommended_brands: Array.isArray(parsed.recommended_brands) ? parsed.recommended_brands : [],
     cited_brands: Array.isArray(parsed.cited_brands) ? parsed.cited_brands : [],
   };
+}
+
+// The prompt asks for ONLY a JSON object with no other text, but models
+// sometimes wrap valid JSON in markdown code fences anyway
+// (```json {...} ``` instead of just {...}). Strip that wrapping rather
+// than relying purely on instruction-following — a real failure was caught
+// in production from exactly this.
+function stripCodeFences(text) {
+  const trimmed = text.trim();
+  const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  return fenceMatch ? fenceMatch[1].trim() : trimmed;
 }
