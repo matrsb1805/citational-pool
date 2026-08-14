@@ -11,7 +11,8 @@
     "enqueue:dry": "DRY_RUN=true node src/scripts/enqueuePoolRun.js",
     "migrate": "node src/scripts/migrate.js",
     "migrate:v2": "node src/scripts/migrate_v2.js",
-    "dedupe": "node src/scripts/dedupe.js"
+    "dedupe": "node src/scripts/dedupe.js",
+    "search-volume": "node src/scripts/fetchSearchVolume.js"
   },
   "engines": {
     "node": ">=18.17"

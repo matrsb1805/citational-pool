@@ -12,18 +12,9 @@
 // this parsing logic — see README.
 
 import 'dotenv/config';
+import { dataforseoAuthHeader } from '../dataforseoAuth.js';
 
 const DATAFORSEO_BASE = 'https://api.dataforseo.com/v3';
-
-function authHeader() {
-  const login = process.env.DATAFORSEO_LOGIN;
-  const password = process.env.DATAFORSEO_PASSWORD;
-  if (!login || !password) {
-    throw new Error('DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD not set');
-  }
-  const token = Buffer.from(`${login}:${password}`).toString('base64');
-  return `Basic ${token}`;
-}
 
 export async function queryGoogleAiMode(queryText) {
   const payload = [
@@ -39,7 +30,7 @@ export async function queryGoogleAiMode(queryText) {
   const res = await fetch(`${DATAFORSEO_BASE}/serp/google/ai_mode/live/advanced`, {
     method: 'POST',
     headers: {
-      Authorization: authHeader(),
+      Authorization: dataforseoAuthHeader(),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),

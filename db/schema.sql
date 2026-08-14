@@ -43,8 +43,11 @@ create index if not exists idx_subcategories_category on subcategories(category_
 
 -- ----------------------------------------------------------------------------
 -- queries: the shared pool, now hung off subcategory rather than category.
--- search_volume backs the "ranked by real search volume, not marketer
--- phrases" positioning (Summary doc, Section 2).
+-- search_volume: real Google Ads search volume, populated by
+-- src/scripts/fetchSearchVolume.js (run manually/periodically — see
+-- README). NULL until that script has been run at least once; NULL after
+-- that means DataForSEO returned no measurable volume for that exact
+-- phrase, not that the fetch failed.
 -- source distinguishes pool-seeded queries from a future merchant-submitted
 -- custom-query type (Pro-tier gate) — the enum leaves room for it without a
 -- redesign, per Summary doc Section 3 "Custom queries" note.

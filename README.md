@@ -144,6 +144,28 @@ cadence from the Summary doc, Section 3, needs per-shop scheduling once real
 subscriptions exist — expect `scheduler.js` to grow a per-plan schedule (or a
 DB-driven schedule table) at that point, not stay a single cron expression.
 
+## Search volume
+
+`queries.search_volume` is populated by a separate, periodic script — not
+part of the worker's continuous scan loop, since real search volume doesn't
+meaningfully change scan-to-scan the way AI answers do. Running it
+unnecessarily just spends money for no new information.
+
+```
+railway ssh -s citational-pool -- npm run search-volume
+```
+
+This calls DataForSEO's Keyword Data API (`keywords_data/google_ads/search_volume/live`)
+— a different DataForSEO product from the AI Mode endpoint used for the
+actual channel calls, but billed to the same account/credentials already
+set up. UNVERIFIED — not run against a live account in this build session;
+check the console output against what's actually in the `queries` table
+after the first run, same as any other unverified endpoint in this project.
+
+A `NULL` search_volume after running this means DataForSEO measured no
+meaningful volume for that exact phrase — a real answer, not a failure.
+Re-run this occasionally (e.g. monthly) rather than on every deploy.
+
 ## Setup
 
 1. **Railway**: create a project, add a **Postgres** service and a **Redis**
