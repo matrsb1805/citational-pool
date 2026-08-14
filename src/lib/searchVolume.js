@@ -10,10 +10,14 @@
 // requests — it deliberately throws rather than silently truncating if that
 // limit is hit, so that failure is loud rather than quietly wrong.
 //
-// STATUS: UNVERIFIED — not run against a live account in this build
-// session. Response field names follow current DataForSEO documentation;
-// confirm against a real response the first time this runs (see
-// src/scripts/fetchSearchVolume.js).
+// STATUS: revised after a real batch failure — Google Ads rejects certain
+// punctuation outright (parentheses, several other symbols — see
+// sanitizeForGoogleAds in fetchSearchVolume.js), and a single bad keyword
+// fails the ENTIRE batched request, not just that keyword. Sanitization now
+// happens before keywords reach this function. Separately: a genuine `null`
+// search_volume for a keyword DataForSEO successfully processed just means
+// "no measurable volume for this exact phrase," not a failure — that's
+// expected and correct, not a bug.
 
 import 'dotenv/config';
 import { dataforseoAuthHeader } from './dataforseoAuth.js';
@@ -58,10 +62,11 @@ export async function fetchSearchVolume(keywords) {
   const results = task?.result || [];
   const byKeyword = {};
   for (const r of results) {
-    // DataForSEO may return null for keywords with no measurable volume —
-    // that's a real "less than the platform can detect" answer, not a
-    // failure, so it's kept as null rather than defaulted to 0.
-    byKeyword[r.keyword] = {
+    // DataForSEO lowercases every keyword on submission (documented
+    // behavior) and returns it lowercased too — key by lowercase so
+    // matching back to the original query text is reliable regardless of
+    // how it was originally capitalized.
+    byKeyword[r.keyword.toLowerCase()] = {
       search_volume: r.search_volume ?? null,
       competition: r.competition ?? null,
       cpc: r.cpc ?? null,
