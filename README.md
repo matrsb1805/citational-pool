@@ -81,6 +81,27 @@ picking up a database that already ran the old schema, apply
 `npm run migrate:v2` once (see Setup) before the new code will work against
 it.
 
+## Changelog note — mentions restructure (v3)
+
+Charles's "Data Dependencies for Steve" doc asked for two things that turned
+out to be the same underlying change: per-mention product name + exact
+quote (`products[]`), and an explicit `mention_type` on competitor mentions.
+Both come from the same classification pass over the same transcript, so
+`query_results.recommended_brands`/`cited_brands` (two flat text arrays)
+were replaced with a single `mentions` jsonb array — one object per brand
+mention, carrying `brand`, `mention_type`, `product_name` (nullable), and
+`quote` (nullable). Captured for every brand mentioned, not just the
+merchant's own — there's no extra collection cost to this, and it resolves
+the doc's open "hard boundary or not" question: whether a future API
+exposes competitor product-level detail becomes a pure serving-layer
+decision, same principle as existing tier gating, not something the
+collection layer needs to pre-decide. See `db/schema.sql`'s comment on
+`query_results` and the `brand_mentions` view for the query patterns this
+enables. If you're picking up a database that already ran the v2 schema,
+apply `npm run migrate:v3` once (see Setup) — this one preserves existing
+data (backfills old rows with `product_name`/`quote` = null) rather than
+dropping it, since real paid-for pool data exists by this point.
+
 ## What this is
 
 - Postgres schema matching the Summary doc's data model: `categories` →

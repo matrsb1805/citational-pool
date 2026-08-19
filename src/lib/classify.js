@@ -1,34 +1,37 @@
 // Classification pass: takes a channel transcript + reference list and
-// extracts which brands the AI's answer actually recommended vs. merely
-// mentioned/cited — with NO target brand involved. Earlier versions of this
-// file compared against a single "target brand," which only makes sense
-// once a specific merchant exists (Phase 2). In Phase 1's shared pool,
-// there is no merchant yet, so forcing a target brand meant silently
+// extracts a structured list of brand mentions — brand, whether it was
+// recommended or merely cited, the specific product named (if any), and the
+// exact supporting quote. No target brand involved. Earlier versions of
+// this file compared against a single "target brand," which only makes
+// sense once a specific merchant exists (Phase 2). In Phase 1's shared
+// pool, there is no merchant yet, so forcing a target brand meant silently
 // defaulting to whichever brand happened to be listed first in
 // brands.json — which produced a real, confusing bug (see commit history /
-// README). Extracting the raw fact — which brands were recommended, which
-// were cited — instead of a single-brand comparison is also a *stronger*
-// version of the shared-pool cost story: "was CeraVe recommended" becomes a
-// free lookup against already-stored data for any brand, anytime, rather
-// than something that has to be decided again per merchant.
+// README).
+//
+// v3: extended from a flat recommended_brands/cited_brands pair to one
+// `mentions` array per result, adding product_name and quote per mention —
+// per Charles's Data Dependencies doc, needed for Essential's "product-level
+// detail & exact phrasing" and the "generic win" lens (recommended, no
+// specific product named). Captured for EVERY brand mentioned, including
+// competitors — there's no extra cost to this since one classification pass
+// already sees every brand in the transcript. Whether a future API exposes
+// competitor product-level detail is a serving-layer decision, not a
+// collection-layer one.
 //
 // This is still an LLM classification pass over free text, not the NLP
 // claim-extraction pipeline described in the SDX:VibeEvidence work — spot
 // check output against raw_response before trusting it at scale.
 //
-// STATUS: revised after a real test caught the classifier confusing cited
-// source publishers (e.g. a hospital's blog) with actual product brands,
-// and again after a real failure caught the model wrapping valid JSON in
-// markdown code fences despite being told not to. Spot-checked against a
-// handful of real transcripts as of this revision — worth checking more,
-// especially educational/non-commercial answers, before trusting this at
-// volume.
+// STATUS: v3 prompt not yet spot-checked against a real transcript — do
+// that before trusting product_name/quote at any volume, same caution
+// applied to every revision of this file so far.
 
 import 'dotenv/config';
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
-const SYSTEM_PROMPT = `You extract which specific product/company brands are recommended or cited in an AI assistant's answer to a shopper question.
+const SYSTEM_PROMPT = `You extract which specific product/company brands are recommended or cited in an AI assistant's answer to a shopper question, including product-level detail when the answer names one.
 
 Only consider brands that are discussed IN THE ANSWER TEXT ITSELF as a product or company the shopper could actually buy from — e.g. "CeraVe" or "Vanicream" being suggested as an option.
 
@@ -36,20 +39,21 @@ Do NOT extract a name just because it appears as the source/publisher of a cited
 
 Many correct answers will have NO brands at all — general educational answers (e.g. explaining a chemical, a category, a how-to) legitimately have empty lists. Don't force a brand into the output just because the transcript cites sources.
 
+For each brand mention, extract:
+- brand: the brand/company name, standard public capitalization (e.g. "CeraVe", "The Ordinary", "La Roche-Posay"). Brand only, never folded into the product name field.
+- mention_type: "recommended" (actively suggested as an answer to the shopper's question) or "cited" (discussed or compared, but not the actual recommendation). A brand should never appear twice with different mention_types — pick the one that best matches how it's used.
+- product_name: the SPECIFIC named product if the answer names one (e.g. "Moisturizing Cream", "Align Leggings") — null if the answer only names the brand generically with no specific product.
+- quote: a short exact phrase from the transcript (a few words to one sentence, copied verbatim) that supports this mention — null only if genuinely not extractable.
+
 Rules:
-- recommended_brands: brand names the assistant is actively suggesting/endorsing as an answer to the shopper's question.
-- cited_brands: brand names discussed or compared in the answer, but not actively recommended.
-- A brand should never appear in both lists.
 - Only include brands you're confident are real, purchasable product/company brands — never publishers, review sites, hospitals, or news outlets cited only as information sources.
-- Brand names only, never specific product names (e.g. "CeraVe", not "CeraVe Moisturizing Cream").
-- Use the brand's standard public name and capitalization (e.g. "CeraVe", "The Ordinary", "La Roche-Posay").
-- Respond with ONLY a JSON object: {"recommended_brands": [...], "cited_brands": [...]}. No other text. Empty arrays are correct and expected for many answers.`;
+- Respond with ONLY a JSON object: {"mentions": [{"brand": "...", "mention_type": "...", "product_name": "..." | null, "quote": "..." | null}, ...]}. No other text. An empty mentions array is correct and expected for many answers.`;
 
 export async function classifyResult({ transcript, references }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
   if (!transcript) {
-    return { recommended_brands: [], cited_brands: [] };
+    return { mentions: [] };
   }
 
   const referencesBlock = (references || [])
@@ -73,7 +77,7 @@ export async function classifyResult({ transcript, references }) {
     },
     body: JSON.stringify({
       model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
-      max_tokens: 300,
+      max_tokens: 600,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage }],
     }),
@@ -93,9 +97,17 @@ export async function classifyResult({ transcript, references }) {
     throw new Error(`classify.js: could not parse model output as JSON: ${text}`);
   }
 
+  const mentions = Array.isArray(parsed.mentions) ? parsed.mentions : [];
+
   return {
-    recommended_brands: Array.isArray(parsed.recommended_brands) ? parsed.recommended_brands : [],
-    cited_brands: Array.isArray(parsed.cited_brands) ? parsed.cited_brands : [],
+    mentions: mentions
+      .filter((m) => m && typeof m.brand === 'string' && ['recommended', 'cited'].includes(m.mention_type))
+      .map((m) => ({
+        brand: m.brand,
+        mention_type: m.mention_type,
+        product_name: typeof m.product_name === 'string' ? m.product_name : null,
+        quote: typeof m.quote === 'string' ? m.quote : null,
+      })),
   };
 }
 

@@ -34,7 +34,7 @@ async function processJob(job) {
     throw new Error(`[${channel}] channel call failed: ${err.message}`);
   }
 
-  let classification = { recommended_brands: [], cited_brands: [] };
+  let classification = { mentions: [] };
   try {
     classification = await classifyResult({
       transcript: result.transcript,
@@ -42,12 +42,12 @@ async function processJob(job) {
     });
   } catch (err) {
     // Classification failure shouldn't lose the raw response — store it
-    // with empty brand lists and the error, so it can be re-classified
-    // later without re-calling the (paid) channel API.
+    // with an empty mentions array and the error, so it can be
+    // re-classified later without re-calling the (paid) channel API.
     await query(
       `insert into query_results
-         (scan_id, query_id, channel, recommended_brands, cited_brands, raw_response, cost_usd, error)
-       values ($1, $2, $3, '{}', '{}', $4, $5, $6)`,
+         (scan_id, query_id, channel, mentions, raw_response, cost_usd, error)
+       values ($1, $2, $3, '[]', $4, $5, $6)`,
       [scanId, queryId, channel, result.raw_response, result.cost_usd, `classify: ${err.message}`]
     );
     return;
@@ -55,14 +55,13 @@ async function processJob(job) {
 
   await query(
     `insert into query_results
-       (scan_id, query_id, channel, recommended_brands, cited_brands, raw_response, cost_usd)
-     values ($1, $2, $3, $4, $5, $6, $7)`,
+       (scan_id, query_id, channel, mentions, raw_response, cost_usd)
+     values ($1, $2, $3, $4, $5, $6)`,
     [
       scanId,
       queryId,
       channel,
-      classification.recommended_brands,
-      classification.cited_brands,
+      JSON.stringify(classification.mentions),
       result.raw_response,
       result.cost_usd,
     ]

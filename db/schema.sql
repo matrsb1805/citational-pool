@@ -110,16 +110,16 @@ create index if not exists idx_scans_category on scans(category_id);
 -- ----------------------------------------------------------------------------
 -- query_results: atomic unit. One row per query per channel per scan.
 --
--- recommended_brands / cited_brands (v2 — replaced a single state +
--- competitor_brand pair): "was brand X recommended/cited" only makes sense
--- relative to ONE specific brand, but Phase 1 has no merchant yet to be that
--- brand — forcing one anyway (the original version defaulted to whichever
--- brand was listed first in brands.json) produced silently wrong results.
--- Storing the raw fact — which brands the answer actually recommended vs.
--- merely mentioned — means "was CeraVe recommended" becomes a free lookup
--- against already-stored data for ANY brand, computed per-merchant later,
--- rather than a decision baked in at collection time. See brand_mentions
--- view below for how to query this.
+-- mentions (v3 — replaced recommended_brands/cited_brands text[] pair):
+-- one jsonb array, each element shaped:
+--   { "brand": "CeraVe", "mention_type": "recommended"|"cited",
+--     "product_name": "Moisturizing Cream" | null, "quote": "..." | null }
+-- product_name/quote are captured for EVERY mentioned brand, not just the
+-- merchant's own — there's no extra cost to this, since one classification
+-- pass already sees every brand in the transcript. Whether a future API
+-- exposes competitor product-level detail (vs. brand-only) is a serving-
+-- layer/tier-gating decision, enforced server-side same as everything else
+-- — the collection layer doesn't need to pre-decide that boundary.
 -- raw_response is kept in full regardless of parsing, so re-classification
 -- is always possible without re-querying the channel.
 -- ----------------------------------------------------------------------------
@@ -128,8 +128,7 @@ create table if not exists query_results (
   scan_id             uuid not null references scans(id) on delete cascade,
   query_id            uuid not null references queries(id) on delete cascade,
   channel             text not null check (channel in ('chatgpt', 'google_ai_mode', 'perplexity')),
-  recommended_brands  text[] not null default '{}',
-  cited_brands        text[] not null default '{}',
+  mentions            jsonb not null default '[]',
   raw_response        jsonb,
   cost_usd            numeric(10, 5),
   fetched_at          timestamptz not null default now(),
@@ -139,8 +138,7 @@ create table if not exists query_results (
 create index if not exists idx_results_scan on query_results(scan_id);
 create index if not exists idx_results_query on query_results(query_id);
 create index if not exists idx_results_channel on query_results(channel);
-create index if not exists idx_results_recommended_brands on query_results using gin(recommended_brands);
-create index if not exists idx_results_cited_brands on query_results using gin(cited_brands);
+create index if not exists idx_results_mentions on query_results using gin(mentions jsonb_path_ops);
 
 -- ----------------------------------------------------------------------------
 -- subscriptions: billing state per shop. Empty in Phase 1. reconciled_at
@@ -161,9 +159,10 @@ create table if not exists subscriptions (
 );
 
 -- ----------------------------------------------------------------------------
--- brand_mentions: unnests recommended_brands/cited_brands into one row per
--- (result, brand, mention_type). Every downstream question — "was CeraVe
--- recommended," "who's beating CeraVe," a category-wide leaderboard — is a
+-- brand_mentions: unnests query_results.mentions into one row per
+-- (result, brand, mention_type), now carrying product_name/quote too. Every
+-- downstream question — "was CeraVe recommended," "who's beating CeraVe,"
+-- a category-wide leaderboard, or Essential's "exact phrasing" detail — is a
 -- filter/group-by against this view, for any brand, computed at query time.
 -- No target brand is baked in anywhere upstream of this.
 --
@@ -178,6 +177,10 @@ create table if not exists subscriptions (
 --   where category_slug = 'skincare-beauty' and brand <> 'CeraVe'
 --   group by brand, mention_type
 --   order by count(*) desc;
+--
+-- Example — Essential's "generic win" lens (recommended, no product named):
+--   select * from brand_mentions
+--   where brand = 'CeraVe' and mention_type = 'recommended' and product_name is null;
 -- ----------------------------------------------------------------------------
 create or replace view brand_mentions as
 select
@@ -191,17 +194,15 @@ select
   c.id            as category_id,
   c.slug          as category_slug,
   m.brand,
-  m.mention_type
+  m.mention_type,
+  m.product_name,
+  m.quote
 from query_results qr
 join queries q on q.id = qr.query_id
 join subcategories sc on sc.id = q.subcategory_id
 join categories c on c.id = sc.category_id
 join scans s on s.id = qr.scan_id
-cross join lateral (
-  select unnest(qr.recommended_brands) as brand, 'recommended' as mention_type
-  union all
-  select unnest(qr.cited_brands) as brand, 'cited' as mention_type
-) m;
+cross join lateral jsonb_to_recordset(qr.mentions) as m(brand text, mention_type text, product_name text, quote text);
 
 comment on table categories is 'Flagship categories (e.g. skincare/beauty)';
 comment on table subcategories is 'Subcategories within a category — supports partial rollout without schema change';
