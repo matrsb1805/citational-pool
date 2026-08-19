@@ -1,15 +1,10 @@
 // Channel: Google AI Mode, via DataForSEO's serp/google/ai_mode/live/advanced
-// endpoint. Carried forward from the earlier build — same deliberate
-// deviation from an original spec that named "Google Shopping API": AI Mode
-// returns a generated summary plus a references array of cited domains,
-// which is what "was this brand recommended/cited" actually needs. Google
-// Shopping API returns product listings, not endorsement language.
+// endpoint. AI Mode returns a generated summary plus a references array of
+// cited domains — this is what "was this brand recommended/cited" needs.
+// Google Shopping API returns product listings, not endorsement language.
 //
-// STATUS: UNVERIFIED. The `type` field match below (`ai_mode_result` /
-// `ai_overview`) is inferred from DataForSEO's documentation, not confirmed
-// against a live response. First action on a fresh Railway/DataForSEO
-// account: run one query for real and check the raw response shape against
-// this parsing logic — see README.
+// task.cost is DataForSEO's own reported dollar cost for this specific
+// call — a real figure, not estimated.
 
 import 'dotenv/config';
 import { dataforseoAuthHeader } from '../dataforseoAuth.js';
@@ -47,8 +42,6 @@ export async function queryGoogleAiMode(queryText) {
   }
 
   const items = task?.result?.[0]?.items || [];
-  // UNVERIFIED: adjust this filter once a live response confirms the real
-  // `type` value(s) for the AI Mode generated-answer item.
   const aiItem = items.find((i) => i.type === 'ai_mode_result' || i.type === 'ai_overview');
 
   return {

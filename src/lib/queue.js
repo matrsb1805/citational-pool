@@ -24,11 +24,6 @@ export const SCAN_QUEUE_NAME = 'scan-jobs';
 
 export const scanQueue = new Queue(SCAN_QUEUE_NAME, { connection });
 
-// One job = one (query, channel) pair. Kept small and granular on purpose:
-// BullMQ retries/backpressure/concurrency all operate at the job level, so
-// the finer-grained the job, the more useful those mechanics are. A failed
-// Perplexity call for one query shouldn't block or retry the other two
-// channels for that same query.
 export function scanJobId({ scanId, queryId, channel }) {
   return `${scanId}:${queryId}:${channel}`;
 }

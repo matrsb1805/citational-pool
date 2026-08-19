@@ -1,11 +1,13 @@
-// Channel: Perplexity, via the Perplexity API (sonar models).
-// Unlike the ChatGPT channel, this one is a reasonably direct analog to the
-// consumer product — Perplexity's API models genuinely browse and return a
-// citations list, which is the same mechanism the chat product uses.
+// Channel: Perplexity, via the Perplexity API (sonar models). The API
+// models genuinely browse and return a citations list, the same mechanism
+// the consumer product uses.
 //
-// STATUS: UNVERIFIED — not run against a live Perplexity key in this build
-// session; response shape below follows current public API docs
-// (docs.perplexity.ai) but hasn't been confirmed live.
+// cost_usd: FIXED — this was hardcoded to null in earlier versions, but
+// Perplexity's response actually includes a real dollar cost at
+// usage.cost.total_cost. Caught because a cost-sizing query showed data
+// only for google_ai_mode (whose cost is real DataForSEO-reported data) and
+// nothing for perplexity or chatgpt — turned out perplexity's real number
+// was sitting right there in the response the whole time, just never read.
 
 import 'dotenv/config';
 
@@ -40,7 +42,7 @@ export async function queryPerplexity(queryText) {
     raw_response: data,
     transcript,
     references: citations.map((url) => ({ url, domain: safeDomain(url), title: null })),
-    cost_usd: null,
+    cost_usd: data?.usage?.cost?.total_cost ?? null,
   };
 }
 

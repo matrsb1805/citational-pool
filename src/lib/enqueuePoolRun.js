@@ -4,8 +4,6 @@ import { createPoolScan } from './scans.js';
 
 const CHANNELS = ['chatgpt', 'google_ai_mode', 'perplexity'];
 
-// Enqueues one BullMQ job per (active query x channel), creating one pool
-// scan per category first. Returns a summary for logging/dry-run output.
 export async function enqueuePoolRun({ dryRun = false, maxQueries = 0 } = {}) {
   const { rows: categories } = await query(
     `select id, slug, name from categories where active = true order by slug`

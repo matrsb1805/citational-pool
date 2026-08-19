@@ -1,8 +1,6 @@
 // Persistent worker process (Railway service #1). Sits and drains the
-// scan-jobs queue — this is the piece a cron-only model doesn't have: a
-// process that's actually running between triggers, so retries and
-// backpressure have somewhere to happen. Deploy as its own Railway service
-// with `npm run worker` as the start command.
+// scan-jobs queue. Deploy as its own Railway service with `npm run worker`
+// as the start command.
 
 import { Worker } from 'bullmq';
 import { connection, SCAN_QUEUE_NAME } from './lib/queue.js';
@@ -28,9 +26,6 @@ async function processJob(job) {
   try {
     result = await channelFn(queryText);
   } catch (err) {
-    // Let BullMQ's retry policy (see queue attach below) handle transient
-    // channel failures — write nothing here, just rethrow so the job is
-    // marked failed and retried per the job's attempts config.
     throw new Error(`[${channel}] channel call failed: ${err.message}`);
   }
 
@@ -41,9 +36,6 @@ async function processJob(job) {
       references: result.references,
     });
   } catch (err) {
-    // Classification failure shouldn't lose the raw response — store it
-    // with an empty mentions array and the error, so it can be
-    // re-classified later without re-calling the (paid) channel API.
     await query(
       `insert into query_results
          (scan_id, query_id, channel, mentions, raw_response, cost_usd, error)

@@ -5,13 +5,8 @@
 -- during Railway troubleshooting (seed.sql originally had no ON CONFLICT
 -- guard). This file:
 --   1. Deletes the duplicate rows, keeping the oldest copy of each query.
---   2. Adds the same unique constraint to the ALREADY-EXISTING table (the
---      `create table if not exists` in schema.sql only applies to brand new
---      tables — it won't retroactively alter one that already exists).
---
--- Safe to run more than once: step 1 is a no-op once duplicates are gone,
--- and step 2 will simply error harmlessly if the constraint already exists
--- (safe to ignore that specific error on a re-run).
+--   2. Adds the same unique constraint to the ALREADY-EXISTING table.
+-- Safe to run more than once.
 -- ============================================================================
 
 delete from query_results

@@ -12,8 +12,6 @@ if (!process.env.DATABASE_URL) {
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Railway Postgres requires SSL; local dev usually doesn't. Toggle via env
-  // if you hit a self-signed cert error locally.
   ssl: process.env.PGSSL === 'false' ? false : { rejectUnauthorized: false },
 });
 

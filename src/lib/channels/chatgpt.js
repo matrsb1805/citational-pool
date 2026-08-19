@@ -4,17 +4,21 @@
 // There is no public API that queries the ChatGPT consumer product itself.
 // This calls the OpenAI Chat Completions API as a proxy signal — same
 // underlying model family, but not the same retrieval/browsing/citation
-// behaviour a person sees in the ChatGPT app, which can pull in live web
-// results and shopping data ChatGPT doesn't expose a plain chat-completion
-// call to. Prior project research also flagged that ChatGPT's shopping
-// results lean heavily on Google Shopping data — meaning GMC feed work may
-// matter more for real ChatGPT visibility than anything this channel can
-// directly observe. Treat this channel's state/competitor_brand output as
-// directional, not a confirmed measure of ChatGPT-the-product's behaviour,
-// until validated against real usage.
+// behaviour a person sees in the ChatGPT app. Treat this channel's mention
+// output as directional, not a confirmed measure of ChatGPT-the-product's
+// behaviour, until validated against real usage.
 //
-// STATUS: UNVERIFIED — not run against a live OpenAI key in this build
-// session.
+// COST: cost_usd is deliberately left null here, unlike the other two
+// channels. OpenAI's Chat Completions API does not return a dollar cost —
+// only token counts (preserved in full in raw_response.usage). Computing a
+// dollar figure requires hardcoding a specific per-model rate, and as of
+// this writing (Aug 2026) published OpenAI pricing is genuinely
+// inconsistent across sources for the model in use here — some report
+// materially different rates for the same model name. Storing a guessed
+// number would silently mislead the cost-sizing work this feeds into.
+// Compute this downstream once a specific, confirmed rate is chosen and
+// verified against an actual OpenAI billing statement — don't trust a
+// constant hardcoded here without that verification.
 
 import 'dotenv/config';
 
@@ -52,7 +56,7 @@ export async function queryChatGPT(queryText) {
     channel: 'chatgpt',
     raw_response: data,
     transcript,
-    references: [], // chat completions responses don't carry a citation list
-    cost_usd: null, // compute from data.usage + your OpenAI pricing if needed
+    references: [],
+    cost_usd: null, // see comment above — token counts are in raw_response.usage
   };
 }

@@ -1,8 +1,6 @@
 // Scheduler process (Railway service #2). Deliberately thin: all it does is
-// enqueue jobs on a cron tick. The actual channel calls + classification
-// happen in worker.js. Keeping these as separate processes/services means
-// the scheduler stays simple and the worker can scale independently.
-// Deploy with `npm run scheduler` as the start command.
+// enqueue jobs on a cron tick. Deploy with `npm run scheduler` as the start
+// command.
 
 import cron from 'node-cron';
 import 'dotenv/config';
@@ -28,9 +26,3 @@ cron.schedule(
   },
   { timezone: 'UTC' }
 );
-
-// NOTE — Phase 2: once real merchants/subscriptions exist, Free (weekly)
-// vs Essential (daily) cadence per Summary doc Section 3 will need per-shop
-// scheduling, not one pool-wide cron. POOL_CRON as a single env var is a
-// Phase 1 simplification — expect to replace this file's single schedule
-// with a per-plan schedule (or a DB-driven schedule table) at that point.

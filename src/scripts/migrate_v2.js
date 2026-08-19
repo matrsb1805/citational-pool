@@ -1,7 +1,3 @@
-// One-time migration — see db/migrate_v2_brand_lists.sql for the full
-// explanation. Run once via:
-//   railway ssh -s citational-pool -- npm run migrate:v2
-
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';

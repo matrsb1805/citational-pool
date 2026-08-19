@@ -1,16 +1,7 @@
 -- ============================================================================
--- One-time migration: replace query_results.state/competitor_brand with
--- recommended_brands/cited_brands. See db/schema.sql's comment on
--- query_results for the full reasoning.
---
--- This drops and recreates query_results — acceptable here because, at the
--- point this migration was written, only a handful of manual test rows
--- existed. If real pool data has accumulated by the time this runs, don't
--- run it blind: back up query_results first, or write a data-preserving
--- migration instead (e.g. treat every existing recommended-state row's
--- implicit brand as unrecoverable, since the old schema never stored which
--- brand state/competitor_brand were computed against for category-level
--- queries — this is itself a consequence of the bug being fixed here).
+-- One-time migration (v2, historical): replaced query_results.state/
+-- competitor_brand with recommended_brands/cited_brands. Superseded by
+-- migrate_v3_mentions.sql — kept for project history.
 -- ============================================================================
 
 drop table if exists query_results cascade;

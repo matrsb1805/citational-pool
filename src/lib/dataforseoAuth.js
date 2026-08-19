@@ -1,7 +1,7 @@
 // Shared Basic Auth header for DataForSEO — used by both the Google AI Mode
-// channel (src/lib/channels/googleAiMode.js) and the search volume fetch
-// (src/lib/searchVolume.js). Same account, two different DataForSEO
-// products (AI Mode SERP API vs. Keyword Data API), same credentials.
+// channel and the search volume fetch. Same account, two different
+// DataForSEO products (AI Mode SERP API vs. Keyword Data API), same
+// credentials.
 
 export function dataforseoAuthHeader() {
   const login = process.env.DATAFORSEO_LOGIN;

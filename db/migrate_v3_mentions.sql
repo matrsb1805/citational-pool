@@ -1,19 +1,15 @@
 -- ============================================================================
 -- v3 migration: replace query_results.recommended_brands/cited_brands
 -- (text[] pair) with a single mentions jsonb array, adding product_name and
--- quote per mention. See db/schema.sql's comment on query_results for the
--- full reasoning (Charles's Data Dependencies doc — products[] and
--- mention_type asks turned out to be the same underlying change).
+-- quote per mention. See db/schema.sql's comment on query_results.
 --
--- Unlike the v2 migration, this one PRESERVES existing data — the full pool
--- test run (~180 real, paid-for rows) is worth keeping, not dropping.
--- Backfilled rows get product_name/quote = null (that detail genuinely
--- wasn't captured before this revision) but keep their real brand/
--- mention_type data.
+-- Unlike the v2 migration, this one PRESERVES existing data — real, paid-for
+-- pool data exists by this point. Backfilled rows get product_name/quote =
+-- null (that detail genuinely wasn't captured before this revision) but
+-- keep their real brand/mention_type data.
 --
 -- Safe to re-run: the backfill only touches rows where mentions is still
--- the default empty array, so running this twice is a no-op the second
--- time.
+-- the default empty array.
 -- ============================================================================
 
 alter table query_results add column if not exists mentions jsonb not null default '[]';

@@ -1,10 +1,3 @@
-// Railway's Postgres doesn't come with a SQL editor the way Supabase's
-// dashboard did — this applies db/schema.sql then db/seed.sql directly
-// against DATABASE_URL. Idempotent: schema.sql uses `if not exists` /
-// `on conflict do nothing` throughout, so this is safe to re-run.
-//
-//   npm run migrate
-
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';

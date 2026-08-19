@@ -1,11 +1,3 @@
-// Manual trigger — run locally or via `railway run` for smoke-testing
-// without waiting for the cron schedule. Mirrors the old runPool.js
-// DRY_RUN / MAX_QUERIES_PER_RUN semantics so the workflow is familiar:
-//
-//   npm run enqueue:dry                        # see what would be enqueued, touch nothing
-//   MAX_QUERIES_PER_RUN=5 npm run enqueue       # enqueue a small capped batch for real
-//   npm run enqueue                             # enqueue the full pool
-
 import 'dotenv/config';
 import { enqueuePoolRun } from '../lib/enqueuePoolRun.js';
 

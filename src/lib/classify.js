@@ -1,31 +1,19 @@
 // Classification pass: takes a channel transcript + reference list and
 // extracts a structured list of brand mentions — brand, whether it was
 // recommended or merely cited, the specific product named (if any), and the
-// exact supporting quote. No target brand involved. Earlier versions of
-// this file compared against a single "target brand," which only makes
-// sense once a specific merchant exists (Phase 2). In Phase 1's shared
-// pool, there is no merchant yet, so forcing a target brand meant silently
-// defaulting to whichever brand happened to be listed first in
-// brands.json — which produced a real, confusing bug (see commit history /
-// README).
+// exact supporting quote. No target brand involved.
 //
 // v3: extended from a flat recommended_brands/cited_brands pair to one
 // `mentions` array per result, adding product_name and quote per mention —
 // per Charles's Data Dependencies doc, needed for Essential's "product-level
-// detail & exact phrasing" and the "generic win" lens (recommended, no
-// specific product named). Captured for EVERY brand mentioned, including
-// competitors — there's no extra cost to this since one classification pass
-// already sees every brand in the transcript. Whether a future API exposes
-// competitor product-level detail is a serving-layer decision, not a
-// collection-layer one.
+// detail & exact phrasing" and the "generic win" lens. Captured for EVERY
+// brand mentioned, including competitors — no extra cost to this since one
+// classification pass already sees every brand. Whether a future API
+// exposes competitor product-level detail is a serving-layer decision.
 //
 // This is still an LLM classification pass over free text, not the NLP
 // claim-extraction pipeline described in the SDX:VibeEvidence work — spot
 // check output against raw_response before trusting it at scale.
-//
-// STATUS: v3 prompt not yet spot-checked against a real transcript — do
-// that before trusting product_name/quote at any volume, same caution
-// applied to every revision of this file so far.
 
 import 'dotenv/config';
 
@@ -112,10 +100,9 @@ export async function classifyResult({ transcript, references }) {
 }
 
 // The prompt asks for ONLY a JSON object with no other text, but models
-// sometimes wrap valid JSON in markdown code fences anyway
-// (```json {...} ``` instead of just {...}). Strip that wrapping rather
-// than relying purely on instruction-following — a real failure was caught
-// in production from exactly this.
+// sometimes wrap valid JSON in markdown code fences anyway. Strip that
+// wrapping rather than relying purely on instruction-following — a real
+// failure was caught in production from exactly this.
 function stripCodeFences(text) {
   const trimmed = text.trim();
   const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);

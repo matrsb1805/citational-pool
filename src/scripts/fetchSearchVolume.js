@@ -1,9 +1,6 @@
 // Fetches real search volume for every active query and stores it in
-// queries.search_volume. This is deliberately NOT part of the worker's
-// per-scan loop — search volume doesn't meaningfully change scan-to-scan
-// (unlike AI answers, which are worth re-checking often), so this is meant
-// to be re-run occasionally (e.g. monthly), not continuously. Running it
-// unnecessarily costs real money for no new information.
+// queries.search_volume. Deliberately NOT part of the worker's per-scan
+// loop — re-run occasionally (e.g. monthly), not continuously.
 //
 //   railway ssh -s citational-pool -- npm run search-volume
 
@@ -11,11 +8,9 @@ import 'dotenv/config';
 import { query, pool } from '../lib/db.js';
 import { fetchSearchVolume } from '../lib/searchVolume.js';
 
-// Google Ads API rejects certain punctuation outright, and — critically —
-// a single bad keyword fails the entire batched request, not just that one
-// keyword (a real failure was caught in production from exactly this: one
-// query containing parentheses took down search volume data for all 60).
-// See: https://dataforseo.com/help-center/using-symbols-in-keywords-when-setting-a-google-ads-task
+// Google Ads API rejects certain punctuation outright, and a single bad
+// keyword fails the entire batched request, not just that one keyword — a
+// real failure was caught in production from exactly this.
 const INVALID_CHARS = /[,!@%^(){}=;~`<>?\\|―·]/g;
 
 function sanitizeForGoogleAds(text) {
@@ -26,9 +21,6 @@ const { rows: queries } = await query(`select id, query_text from queries where 
 
 console.log(`[search-volume] fetching real search volume for ${queries.length} queries...`);
 
-// Track the sanitized text sent for each query, so results (matched back
-// case-insensitively, since DataForSEO lowercases everything) can be
-// mapped to the right row even where sanitization changed the text.
 const sanitizedByQueryId = new Map();
 const keywordsToSend = [];
 for (const q of queries) {

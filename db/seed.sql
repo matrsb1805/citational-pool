@@ -1,21 +1,13 @@
 -- ============================================================================
 -- CitationalAI — Starter Query Seed
 -- ============================================================================
--- Carries forward the original 60-query starter set, restructured under
--- category -> subcategory per the new schema. Subcategory split (2 per
--- flagship category) matches the Summary doc Section 6 league-table starting
--- depth, so the same subcategories can be reused for both the pool and the
--- league tables rather than maintained twice.
---
--- search_volume is left NULL throughout — real search-volume-ranked ordering
--- (Summary doc Section 2, "ranked by real search volume not marketer
--- phrases") depends on the query-cost/data-source sizing that's still an
--- open dependency with Charles/Steve. Do not present these as volume-ranked
--- until that's populated.
---
--- brand_direct / brand_vs_competitor queries use well-known example brands
--- as placeholders so the pool is runnable immediately — swap for real
--- installed-merchant + competitor brands before the first real run.
+-- search_volume is left NULL throughout — populated later by
+-- src/scripts/fetchSearchVolume.js, not at seed time.
+-- Every insert below is guarded with ON CONFLICT DO NOTHING against the
+-- unique (subcategory_id, query_text) constraint in schema.sql — added
+-- after this file being run multiple times (during Railway troubleshooting)
+-- produced 4x duplicate rows before that constraint existed. Safe to re-run
+-- now.
 -- ============================================================================
 
 insert into categories (slug, name) values

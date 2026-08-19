@@ -2,19 +2,6 @@
 -- CitationalAI — Query Pool Schema
 -- Phase 1: Pool Validation (pre-merchant) on Railway Postgres
 -- ============================================================================
--- Data model follows the "Project Summary for Steve" doc (Charles), Section 4,
--- which supersedes the earlier Supabase/GitHub-Actions schema. Key changes
--- from that earlier version:
---   - categories/queries split into categories -> subcategories -> queries,
---     to support partial rollout (2 of N subcategories live) and the league
---     tables, without a future schema change.
---   - query_results is now 3-state (recommended / cited / not_listed) per
---     channel, replacing the old boolean brand_mentions extraction table.
---   - competitor_brand lives directly on query_results (brand-level only,
---     normalised server-side — never trust tier-gating to the frontend).
---   - shops / scans / subscriptions are new: Scan is the merchant-facing
---     snapshot over pooled results. See "Phase 1 vs Phase 2" note below.
--- ============================================================================
 
 create extension if not exists "pgcrypto";
 
@@ -42,15 +29,17 @@ create table if not exists subcategories (
 create index if not exists idx_subcategories_category on subcategories(category_id);
 
 -- ----------------------------------------------------------------------------
--- queries: the shared pool, now hung off subcategory rather than category.
+-- queries: the shared pool, hung off subcategory.
 -- search_volume: real Google Ads search volume, populated by
 -- src/scripts/fetchSearchVolume.js (run manually/periodically — see
 -- README). NULL until that script has been run at least once; NULL after
 -- that means DataForSEO returned no measurable volume for that exact
 -- phrase, not that the fetch failed.
 -- source distinguishes pool-seeded queries from a future merchant-submitted
--- custom-query type (Pro-tier gate) — the enum leaves room for it without a
--- redesign, per Summary doc Section 3 "Custom queries" note.
+-- custom-query type (Pro-tier gate).
+-- unique (subcategory_id, query_text): added after seed.sql was run
+-- multiple times during Railway troubleshooting and produced 4x duplicate
+-- rows — see db/dedupe.sql for the one-time cleanup this required.
 -- ----------------------------------------------------------------------------
 create table if not exists queries (
   id              uuid primary key default gen_random_uuid(),
@@ -74,6 +63,9 @@ create index if not exists idx_queries_active on queries(active) where active = 
 -- ----------------------------------------------------------------------------
 -- shops: Shopify merchants. Empty in Phase 1 (pool validation, no merchants
 -- yet) — populated from Phase 2 (Scout/Free-Essential MVP) onward.
+-- target_brand: the merchant's own brand name — column exists already;
+-- what's missing is the OAuth install flow to populate real rows, not a
+-- schema gap.
 -- ----------------------------------------------------------------------------
 create table if not exists shops (
   id               uuid primary key default gen_random_uuid(),
@@ -84,15 +76,8 @@ create table if not exists shops (
 
 -- ----------------------------------------------------------------------------
 -- scans: a snapshot run over a category, for a shop or for the pool itself.
---
--- PHASE 1 vs PHASE 2:
--- In Phase 1 (this build), there are no merchants yet. The scheduler creates
--- one "pool scan" per category per cadence tick with shop_id = null. Its
--- query_results are the shared pool data every future merchant reads from.
--- From Phase 2 onward, a merchant-triggered scan gets its own row with
--- shop_id set; whether that snapshots the existing pool results for their
--- category or triggers fresh channel calls is a Phase 2 product decision,
--- not resolved in this scaffold.
+-- PHASE 1: no merchants yet. The scheduler creates one "pool scan" per
+-- category per cadence tick with shop_id = null.
 -- ----------------------------------------------------------------------------
 create table if not exists scans (
   id            uuid primary key default gen_random_uuid(),
@@ -122,6 +107,17 @@ create index if not exists idx_scans_category on scans(category_id);
 -- — the collection layer doesn't need to pre-decide that boundary.
 -- raw_response is kept in full regardless of parsing, so re-classification
 -- is always possible without re-querying the channel.
+--
+-- cost_usd: real cost per call where the channel actually reports one.
+-- Perplexity and DataForSEO (google_ai_mode) both return real dollar cost
+-- in their responses — extracted directly. OpenAI's Chat Completions API
+-- does NOT return a dollar cost, only token counts — computing one requires
+-- hardcoding a per-model price, and current OpenAI pricing is genuinely
+-- inconsistent across sources as of Aug 2026 (their lineup has moved past
+-- gpt-4o and published rates conflict). Rather than store a number that
+-- might be wrong, chatgpt.js leaves cost_usd null and preserves full token
+-- counts in raw_response — compute it downstream once a specific,
+-- confirmed rate is chosen, don't trust a guessed constant here.
 -- ----------------------------------------------------------------------------
 create table if not exists query_results (
   id                  uuid primary key default gen_random_uuid(),
@@ -143,10 +139,7 @@ create index if not exists idx_results_mentions on query_results using gin(menti
 -- ----------------------------------------------------------------------------
 -- subscriptions: billing state per shop. Empty in Phase 1. reconciled_at
 -- tracks the last time charge_status was verified directly against Shopify
--- rather than trusted from webhook alone — per Summary doc Section 4, this
--- pattern should be the standard for any other Shopify-sourced state, not a
--- one-off, so treat it as the template if more Shopify-derived fields land
--- on this table later.
+-- rather than trusted from webhook alone.
 -- ----------------------------------------------------------------------------
 create table if not exists subscriptions (
   shop_id           uuid primary key references shops(id) on delete cascade,
@@ -160,7 +153,7 @@ create table if not exists subscriptions (
 
 -- ----------------------------------------------------------------------------
 -- brand_mentions: unnests query_results.mentions into one row per
--- (result, brand, mention_type), now carrying product_name/quote too. Every
+-- (result, brand, mention_type), carrying product_name/quote too. Every
 -- downstream question — "was CeraVe recommended," "who's beating CeraVe,"
 -- a category-wide leaderboard, or Essential's "exact phrasing" detail — is a
 -- filter/group-by against this view, for any brand, computed at query time.
@@ -171,14 +164,14 @@ create table if not exists subscriptions (
 --   from brand_mentions
 --   where brand = 'CeraVe' and category_slug = 'skincare-beauty';
 --
--- Example — "who's beating me" (Summary doc Section 5), for a given brand:
+-- Example — "who's beating me" for a given brand:
 --   select brand, mention_type, count(*)
 --   from brand_mentions
 --   where category_slug = 'skincare-beauty' and brand <> 'CeraVe'
 --   group by brand, mention_type
 --   order by count(*) desc;
 --
--- Example — Essential's "generic win" lens (recommended, no product named):
+-- Example — "generic win" lens (recommended, no product named):
 --   select * from brand_mentions
 --   where brand = 'CeraVe' and mention_type = 'recommended' and product_name is null;
 -- ----------------------------------------------------------------------------
@@ -209,5 +202,5 @@ comment on table subcategories is 'Subcategories within a category — supports 
 comment on table queries is 'Shared query pool, hung off subcategory, ranked by search_volume';
 comment on table shops is 'Shopify merchants — empty in Phase 1';
 comment on table scans is 'Snapshot run over a category; shop_id null = pool-level run (Phase 1)';
-comment on table query_results is 'Atomic result: one row per query per channel per scan; brand mentions as raw lists, no target brand baked in';
+comment on table query_results is 'Atomic result: one row per query per channel per scan; brand mentions as structured list, no target brand baked in';
 comment on table subscriptions is 'Billing state per shop — empty in Phase 1';

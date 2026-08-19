@@ -1,6 +1,3 @@
-// One-time fix — see db/dedupe.sql for the full explanation. Run once via:
-//   railway ssh -s citational-pool -- npm run dedupe
-
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -19,9 +16,6 @@ console.log(`[dedupe] queries before: ${before[0].count}`);
 try {
   await pool.query(sql);
 } catch (err) {
-  // The ALTER TABLE line at the end will error on a re-run once the
-  // constraint already exists — that's expected and harmless. Anything else
-  // should still be surfaced.
   if (!err.message.includes('already exists')) {
     throw err;
   }
