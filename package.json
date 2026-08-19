@@ -12,8 +12,10 @@
     "migrate": "node src/scripts/migrate.js",
     "migrate:v2": "node src/scripts/migrate_v2.js",
     "migrate:v3": "node src/scripts/migrate_v3.js",
+    "migrate:v4": "node src/scripts/migrate_v4.js",
     "dedupe": "node src/scripts/dedupe.js",
-    "search-volume": "node src/scripts/fetchSearchVolume.js"
+    "search-volume": "node src/scripts/fetchSearchVolume.js",
+    "api": "node src/api/server.js"
   },
   "engines": {
     "node": ">=18.17"
@@ -21,6 +23,7 @@
   "dependencies": {
     "bullmq": "^5.12.0",
     "dotenv": "^16.4.5",
+    "express": "^4.19.2",
     "ioredis": "^5.4.1",
     "node-cron": "^3.0.3",
     "pg": "^8.12.0"

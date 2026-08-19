@@ -3,13 +3,20 @@
 // recommended or merely cited, the specific product named (if any), and the
 // exact supporting quote. No target brand involved.
 //
-// v3: extended from a flat recommended_brands/cited_brands pair to one
-// `mentions` array per result, adding product_name and quote per mention —
-// per Charles's Data Dependencies doc, needed for Essential's "product-level
-// detail & exact phrasing" and the "generic win" lens. Captured for EVERY
-// brand mentioned, including competitors — no extra cost to this since one
-// classification pass already sees every brand. Whether a future API
-// exposes competitor product-level detail is a serving-layer decision.
+// v4: products is now an ARRAY per mention, not a single product_name/quote
+// pair. Real feedback caught the gap: one AI answer commonly names several
+// products from the same brand ("X is best overall, but their Y works
+// better for Z") — the v3 single-product shape couldn't represent that.
+// This is common, not an edge case — worth building for properly.
+//
+// v3 (superseded): extended from a flat recommended_brands/cited_brands
+// pair to one `mentions` array per result, adding product_name and quote
+// per mention — per Charles's Data Dependencies doc, needed for
+// Essential's "product-level detail & exact phrasing" and the "generic
+// win" lens. Captured for EVERY brand mentioned, including competitors —
+// no extra cost to this since one classification pass already sees every
+// brand. Whether a future API exposes competitor product-level detail is a
+// serving-layer decision.
 //
 // This is still an LLM classification pass over free text, not the NLP
 // claim-extraction pipeline described in the SDX:VibeEvidence work — spot
@@ -28,14 +35,13 @@ Do NOT extract a name just because it appears as the source/publisher of a cited
 Many correct answers will have NO brands at all — general educational answers (e.g. explaining a chemical, a category, a how-to) legitimately have empty lists. Don't force a brand into the output just because the transcript cites sources.
 
 For each brand mention, extract:
-- brand: the brand/company name, standard public capitalization (e.g. "CeraVe", "The Ordinary", "La Roche-Posay"). Brand only, never folded into the product name field.
-- mention_type: "recommended" (actively suggested as an answer to the shopper's question) or "cited" (discussed or compared, but not the actual recommendation). A brand should never appear twice with different mention_types — pick the one that best matches how it's used.
-- product_name: the SPECIFIC named product if the answer names one (e.g. "Moisturizing Cream", "Align Leggings") — null if the answer only names the brand generically with no specific product.
-- quote: a short exact phrase from the transcript (a few words to one sentence, copied verbatim) that supports this mention — null only if genuinely not extractable.
+- brand: the brand/company name, standard public capitalization (e.g. "CeraVe", "The Ordinary", "La Roche-Posay").
+- mention_type: "recommended" (actively suggested as an answer to the shopper's question) or "cited" (discussed or compared, but not the actual recommendation). A brand should appear at most ONCE per mention_type — if the answer names several products from the same brand (e.g. "CeraVe Moisturizing Cream is best overall, but their SA Lotion works well for very dry skin"), that's still ONE mentions entry for CeraVe, with BOTH products listed in its products array — do not create two separate entries for the same brand.
+- products: an array of {"name": "...", "quote": "..."} — one entry per SPECIFIC named product from this brand. Empty array [] if the answer only names the brand generically with no specific product. Most answers naming 2+ products from the same brand should produce 2+ entries in this array, not be collapsed to one.
 
 Rules:
 - Only include brands you're confident are real, purchasable product/company brands — never publishers, review sites, hospitals, or news outlets cited only as information sources.
-- Respond with ONLY a JSON object: {"mentions": [{"brand": "...", "mention_type": "...", "product_name": "..." | null, "quote": "..." | null}, ...]}. No other text. An empty mentions array is correct and expected for many answers.`;
+- Respond with ONLY a JSON object: {"mentions": [{"brand": "...", "mention_type": "...", "products": [{"name": "...", "quote": "..."}]}, ...]}. No other text. An empty mentions array is correct and expected for many answers; an empty products array within a mention is correct when the brand is named without a specific product.`;
 
 export async function classifyResult({ transcript, references }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -93,8 +99,11 @@ export async function classifyResult({ transcript, references }) {
       .map((m) => ({
         brand: m.brand,
         mention_type: m.mention_type,
-        product_name: typeof m.product_name === 'string' ? m.product_name : null,
-        quote: typeof m.quote === 'string' ? m.quote : null,
+        products: Array.isArray(m.products)
+          ? m.products
+              .filter((p) => p && typeof p.name === 'string')
+              .map((p) => ({ name: p.name, quote: typeof p.quote === 'string' ? p.quote : null }))
+          : [],
       })),
   };
 }

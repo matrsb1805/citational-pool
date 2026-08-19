@@ -1,0 +1,384 @@
+openapi: 3.0.3
+info:
+  title: CitationalAI API
+  version: 0.1.0
+  description: >
+    Data layer for the Free & Essential merchant dashboards and the public
+    league tables. Matches the implemented routes in src/api/ — not a
+    forward-looking spec, this describes what's actually running.
+
+
+    AUTH STATUS: authentication is currently STUBBED (see
+    src/api/middleware/authStub.js). Every /brands/* and /categories/*
+    request is accepted without verifying the caller is authorized for the
+    requested brand — fine for building/testing UI against Phase 1 pool
+    data, NOT safe for a public deployment. Real Shopify session-token auth
+    is a documented Phase 2 dependency (requires the OAuth install flow,
+    not yet built). /categories/*/leaderboard is intentionally public by
+    design, independent of that work.
+
+
+    KNOWN GAP: the underlying mentions structure supports a brand naming
+    MULTIPLE specific products in one answer (products: [{name, quote}]
+    per mention — see the Product schema). None of the endpoints below
+    currently surface that detail in their response — /brands/{brand}/gaps
+    and /categories/{category}/questions both return flat
+    recommended_brands/cited_brands string arrays only, per the original
+    design doc's contract. If Essential's UI needs per-product detail (the
+    stated point of capturing it), that's a response-shape change worth
+    confirming with Charles rather than assuming — not built yet either
+    way.
+  contact:
+    name: Steve Brown
+    email: steve@citational.ai
+servers:
+  - url: https://citational-pool-api.up.railway.app
+    description: Production (Railway) — exact hostname TBD once deployed
+  - url: http://localhost:3000
+    description: Local dev
+
+tags:
+  - name: brands
+    description: Brand-scoped, merchant-facing endpoints (auth stubbed — see info.description)
+  - name: categories
+    description: Category-scoped endpoints (leaderboard is public; questions uses the same auth stub as brands for now)
+  - name: webhooks
+    description: Shopify GDPR compliance webhooks — HMAC-verified
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /brands/{brand}/inclusion:
+    get:
+      tags: [brands]
+      summary: Per-channel recommended/cited counts for a brand in a category
+      description: >
+        Powers the dashboard headline ("is my brand recommended"). The
+        total_questions_checked denominator includes queries where the
+        brand had ZERO mentions — a real, valid outcome, not excluded the
+        way a naive query against the brand_mentions view would (see
+        routes/brands.js comment for why).
+      parameters:
+        - $ref: '#/components/parameters/brandPath'
+        - $ref: '#/components/parameters/categoryQueryRequired'
+        - name: channel
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Channel'
+      responses:
+        '200':
+          description: Inclusion data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  category_slug:
+                    type: string
+                    example: skincare-beauty
+                  channels:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        channel:
+                          $ref: '#/components/schemas/Channel'
+                        recommended_count:
+                          type: integer
+                          example: 4
+                        cited_count:
+                          type: integer
+                          example: 2
+                        total_questions_checked:
+                          type: integer
+                          example: 20
+        '400':
+          $ref: '#/components/responses/MissingCategory'
+
+  /brands/{brand}/competitors:
+    get:
+      tags: [brands]
+      summary: Competitor rollup — "who's beating you"
+      description: >
+        Only includes competitor mentions from queries where the requested
+        brand was NOT itself the recommended answer — a query the merchant
+        already won doesn't surface a competitor list.
+      parameters:
+        - $ref: '#/components/parameters/brandPath'
+        - $ref: '#/components/parameters/categoryQueryRequired'
+      responses:
+        '200':
+          description: Competitor rollup
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  category_slug:
+                    type: string
+                  competitors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        brand:
+                          type: string
+                          example: Vanicream
+                        mention_type:
+                          $ref: '#/components/schemas/MentionType'
+                        mentions:
+                          type: integer
+                          example: 9
+        '400':
+          $ref: '#/components/responses/MissingCategory'
+
+  /brands/{brand}/gaps:
+    get:
+      tags: [brands]
+      summary: Questions where this brand doesn't appear at all
+      parameters:
+        - $ref: '#/components/parameters/brandPath'
+        - $ref: '#/components/parameters/categoryQueryRequired'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Gap list, ordered by real search volume
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/QueryResultSummary'
+        '400':
+          $ref: '#/components/responses/MissingCategory'
+
+  /categories/{category}/leaderboard:
+    get:
+      tags: [categories]
+      summary: Top 5 brands by recommendation count (public — no auth)
+      parameters:
+        - $ref: '#/components/parameters/categoryPath'
+      responses:
+        '200':
+          description: League table, top 5 only
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  category_slug:
+                    type: string
+                  leaderboard:
+                    type: array
+                    maxItems: 5
+                    items:
+                      type: object
+                      properties:
+                        brand:
+                          type: string
+                          example: CeraVe
+                        recommendations:
+                          type: integer
+                          example: 14
+
+  /categories/{category}/questions:
+    get:
+      tags: [categories]
+      summary: Full question list for a category, with latest results
+      parameters:
+        - $ref: '#/components/parameters/categoryPath'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Question list, ordered by real search volume
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  category_slug:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/QueryResultSummary'
+                        - type: object
+                          properties:
+                            search_volume:
+                              type: integer
+                              nullable: true
+                              example: 2900
+
+  /webhooks/customers/data_request:
+    post:
+      tags: [webhooks]
+      summary: Shopify GDPR — customer data request (near-no-op)
+      description: >
+        CitationalAI holds no customer/order-scoped data, so this only
+        acknowledges and logs. Requires HMAC verification like all Shopify
+        webhooks.
+      security:
+        - shopifyHmac: []
+      responses:
+        '200':
+          description: Acknowledged
+        '401':
+          description: Invalid HMAC signature
+
+  /webhooks/customers/redact:
+    post:
+      tags: [webhooks]
+      summary: Shopify GDPR — customer redact (near-no-op)
+      security:
+        - shopifyHmac: []
+      responses:
+        '200':
+          description: Acknowledged
+        '401':
+          description: Invalid HMAC signature
+
+  /webhooks/shop/redact:
+    post:
+      tags: [webhooks]
+      summary: Shopify GDPR — shop redact (real deletion logic)
+      description: >
+        Fires 48 hours after uninstall. Deletes the shop row; on-delete-
+        cascade foreign keys handle scans/subscriptions. 30-day deadline to
+        act from receipt.
+      security:
+        - shopifyHmac: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                shop_id:
+                  type: integer
+                shop_domain:
+                  type: string
+                  example: example.myshopify.com
+      responses:
+        '200':
+          description: Deleted
+        '401':
+          description: Invalid HMAC signature
+        '500':
+          description: Deletion failed
+
+components:
+  securitySchemes:
+    shopifyHmac:
+      type: apiKey
+      in: header
+      name: X-Shopify-Hmac-Sha256
+      description: HMAC-SHA256 signature of the raw request body, base64-encoded, using the app's client secret.
+
+  parameters:
+    brandPath:
+      name: brand
+      in: path
+      required: true
+      schema:
+        type: string
+      example: CeraVe
+    categoryPath:
+      name: category
+      in: path
+      required: true
+      schema:
+        type: string
+      example: skincare-beauty
+    categoryQueryRequired:
+      name: category
+      in: query
+      required: true
+      schema:
+        type: string
+      example: skincare-beauty
+    limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 20
+    offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 0
+
+  schemas:
+    Channel:
+      type: string
+      enum: [chatgpt, google_ai_mode, perplexity]
+    MentionType:
+      type: string
+      enum: [recommended, cited]
+    QueryResultSummary:
+      type: object
+      properties:
+        query_text:
+          type: string
+          example: best moisturiser for sensitive skin
+        channel:
+          $ref: '#/components/schemas/Channel'
+        recommended_brands:
+          type: array
+          items:
+            type: string
+          example: [Vanicream, La Roche-Posay]
+        cited_brands:
+          type: array
+          items:
+            type: string
+          example: []
+    Product:
+      type: object
+      description: >
+        One SPECIFIC named product from a brand mention. A single mention
+        can list several — e.g. one answer naming both a brand's
+        "Moisturising Lotion" and "SA Lotion" for different skin needs.
+      properties:
+        name:
+          type: string
+          example: SA Lotion
+        quote:
+          type: string
+          nullable: true
+          example: for very rough or bumpy skin, CeraVe SA Lotion adds gentle exfoliation
+
+  responses:
+    MissingCategory:
+      description: category query param is required
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: category is required

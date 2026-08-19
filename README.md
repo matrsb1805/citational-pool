@@ -130,6 +130,75 @@ running this means DataForSEO measured no meaningful volume for that exact
 phrase — a real answer, not a failure. Re-run this occasionally (e.g.
 monthly) rather than on every deploy.
 
+## Changelog note — products array (v4)
+
+Real feedback from Charles's team caught a genuine gap: one AI answer
+commonly names several products from the same brand ("X is best overall,
+but their SA Lotion works better for very dry skin") — confirmed both
+analytically (this is a common pattern, not an edge case) and against a
+real example (ChatGPT naming two CeraVe products for "dermatologist
+recommended body lotion for dry skin"). The v3 shape (one `product_name`/
+`quote` per brand per mention) couldn't represent that. Fixed:
+`mentions[].products` is now an array of `{name, quote}`, empty when the
+brand is named generically. This required two related fixes verified
+against a real local Postgres instance, not just code review: the
+`brand_mentions` view needs a second level of unnesting (with a
+`LEFT JOIN LATERAL` so a zero-product mention still produces a row), and
+any endpoint counting "how many times was this brand recommended" needs
+`count(distinct query_result_id)` rather than `count(*)`, since a single
+multi-product recommendation would otherwise inflate the count by however
+many products it named. Apply `npm run migrate:v4` once against an existing
+v3 database — converts the old flat shape to the new array shape in place.
+
+**Known open item, not yet resolved:** none of the API endpoints currently
+surface per-product detail in their responses (`/brands/:brand/gaps` and
+`/categories/:category/questions` still return flat brand-name lists,
+matching the original design doc's contract). If Essential's UI needs the
+per-product detail, that's a response-shape change worth confirming with
+Charles explicitly rather than assuming — see `docs/openapi.yaml`'s
+"KNOWN GAP" note.
+
+## API service
+
+A standalone Express API (Railway service #3), deliberately separate from
+Charles's Remix UI — the schema has changed 3 times in a few days; a
+standalone API absorbs that churn so the UI keeps calling the same stable
+endpoint shapes underneath. Implements the 5 endpoints from Charles's API
+Design Doc plus the 3 GDPR compliance webhooks. Machine-readable spec at
+`docs/openapi.yaml` — import this directly into Postman/Swagger UI/etc.
+rather than hand-translating the design doc.
+
+**Auth is currently stubbed** (`src/api/middleware/authStub.js`) — every
+`/brands/*` request is accepted without verifying the caller is authorized
+for the requested brand. Fine for building/testing UI against real Phase 1
+data; not safe to expose publicly. Real Shopify session-token auth is a
+documented Phase 2 dependency (needs the OAuth install flow, not yet
+built) — the auth context is already read from `req.authContext` in the
+route handlers specifically so swapping the stub out later doesn't require
+touching route logic.
+
+**Deploy as a third Railway service:**
+1. `+ New` → `GitHub Repo` → same repo again
+2. Custom Start Command: `npm run api`
+3. Variables: same `DATABASE_URL` reference as the worker/scheduler
+   (`${{Postgres.DATABASE_URL}}`, unquoted). No channel API keys needed —
+   this service only reads from Postgres, never calls an AI channel
+   directly. `SHOPIFY_API_SECRET` can stay unset for now (webhooks
+   correctly 401 everything until it's set).
+4. Railway auto-assigns `PORT` — the app already reads `process.env.PORT`.
+
+**Tested against a real local Postgres instance** (real schema, real seed,
+realistic mock `query_results`) before being handed off — all 5 endpoints
+confirmed returning correct data, including the corrected competitor-gating
+logic (a brand mentioned alongside another in a query the target brand
+already won correctly does NOT show up as a competitor from that query).
+
+One real bug caught and fixed during that testing: Express 4 doesn't
+automatically catch a rejected promise inside an `async` route handler — an
+unhandled DB connection error crashed the entire server process, not just
+the one request. Fixed with an `asyncHandler` wrapper (`src/api/lib/`)
+around every route.
+
 ## Setup
 
 1. **Railway**: create a project, add a **Postgres** service and a

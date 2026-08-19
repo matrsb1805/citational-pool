@@ -95,11 +95,17 @@ create index if not exists idx_scans_category on scans(category_id);
 -- ----------------------------------------------------------------------------
 -- query_results: atomic unit. One row per query per channel per scan.
 --
--- mentions (v3 — replaced recommended_brands/cited_brands text[] pair):
--- one jsonb array, each element shaped:
---   { "brand": "CeraVe", "mention_type": "recommended"|"cited",
---     "product_name": "Moisturizing Cream" | null, "quote": "..." | null }
--- product_name/quote are captured for EVERY mentioned brand, not just the
+-- mentions (v4 — products is now an ARRAY per mention, not a single
+-- product_name/quote pair): a real gap caught by review — one AI answer
+-- commonly names several products from the same brand ("X is best overall,
+-- but their SA Lotion works better for very dry skin"). The v3 shape
+-- (single product_name/quote) couldn't represent that. Each element:
+--   { "brand": "CeraVe", "mention_type": "recommended",
+--     "products": [ {"name": "Moisturizing Lotion", "quote": "..."},
+--                   {"name": "SA Lotion", "quote": "..."} ] }
+-- products is [] when the brand is named generically with no specific
+-- product — that empty-vs-populated distinction is what powers Essential's
+-- "generic win" lens. Captured for EVERY mentioned brand, not just the
 -- merchant's own — there's no extra cost to this, since one classification
 -- pass already sees every brand in the transcript. Whether a future API
 -- exposes competitor product-level detail (vs. brand-only) is a serving-
@@ -153,27 +159,41 @@ create table if not exists subscriptions (
 
 -- ----------------------------------------------------------------------------
 -- brand_mentions: unnests query_results.mentions into one row per
--- (result, brand, mention_type), carrying product_name/quote too. Every
--- downstream question — "was CeraVe recommended," "who's beating CeraVe,"
--- a category-wide leaderboard, or Essential's "exact phrasing" detail — is a
--- filter/group-by against this view, for any brand, computed at query time.
--- No target brand is baked in anywhere upstream of this.
+-- (result, brand, mention_type, product) — TWO levels of unnesting now
+-- (mentions, then each mention's products), via a LEFT JOIN LATERAL so a
+-- mention with an EMPTY products array still produces exactly one row
+-- (product_name/quote null) rather than disappearing — a generic "CeraVe
+-- was recommended, no specific product" mention must still count.
 --
--- Example — is a given brand recommended, and how often, in a category:
---   select count(*) filter (where mention_type = 'recommended')
+-- IMPORTANT — a consequence of the product-level unnesting: if one mention
+-- lists 2 products, that ONE recommendation now produces 2 rows in this
+-- view. Any count(*) here that's meant to answer "how many TIMES was this
+-- brand recommended" will overcount when multi-product mentions exist.
+-- Count count(distinct query_result_id), not count(*), for anything
+-- counting recommendations/mentions rather than listing products — see the
+-- corrected examples below and src/api/routes/ for the pattern in practice.
+--
+-- Example — is a given brand recommended, and how often, in a category
+-- (correct: counts DISTINCT results, not rows):
+--   select count(distinct query_result_id) filter (where mention_type = 'recommended')
 --   from brand_mentions
 --   where brand = 'CeraVe' and category_slug = 'skincare-beauty';
 --
--- Example — "who's beating me" for a given brand:
---   select brand, mention_type, count(*)
+-- Example — "who's beating me" for a given brand (same distinct-count fix):
+--   select brand, mention_type, count(distinct query_result_id) as mentions
 --   from brand_mentions
 --   where category_slug = 'skincare-beauty' and brand <> 'CeraVe'
 --   group by brand, mention_type
---   order by count(*) desc;
+--   order by mentions desc;
 --
 -- Example — "generic win" lens (recommended, no product named):
 --   select * from brand_mentions
 --   where brand = 'CeraVe' and mention_type = 'recommended' and product_name is null;
+--
+-- Example — list every specific product named for a brand (THIS one wants
+-- every row, product-level, not a distinct count):
+--   select product_name, quote from brand_mentions
+--   where brand = 'CeraVe' and product_name is not null;
 -- ----------------------------------------------------------------------------
 create or replace view brand_mentions as
 select
@@ -188,14 +208,15 @@ select
   c.slug          as category_slug,
   m.brand,
   m.mention_type,
-  m.product_name,
-  m.quote
+  p.name          as product_name,
+  p.quote
 from query_results qr
 join queries q on q.id = qr.query_id
 join subcategories sc on sc.id = q.subcategory_id
 join categories c on c.id = sc.category_id
 join scans s on s.id = qr.scan_id
-cross join lateral jsonb_to_recordset(qr.mentions) as m(brand text, mention_type text, product_name text, quote text);
+cross join lateral jsonb_to_recordset(qr.mentions) as m(brand text, mention_type text, products jsonb)
+left join lateral jsonb_to_recordset(coalesce(m.products, '[]'::jsonb)) as p(name text, quote text) on true;
 
 comment on table categories is 'Flagship categories (e.g. skincare/beauty)';
 comment on table subcategories is 'Subcategories within a category — supports partial rollout without schema change';
