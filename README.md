@@ -158,6 +158,36 @@ per-product detail, that's a response-shape change worth confirming with
 Charles explicitly rather than assuming — see `docs/openapi.yaml`'s
 "KNOWN GAP" note.
 
+## Changelog note — three API gaps from real feedback
+
+Three real gaps caught in review, all fixed and verified against real
+Postgres (multi-category mock data, including a genuine gap and a genuine
+generic-win, ranked correctly by real search volume):
+
+- **`/brands/:brand/gaps` claimed to sort by search volume but didn't
+  return it** — added `search_volume` to the response, matching what
+  `/categories/:category/questions` already had.
+- **`/brands/:brand/competitors` was hardcoded to top-10 with no
+  pagination** — fine for Free's summary card, unusable for Essential's
+  uncapped "By Competition" tab. Now accepts `limit`/`offset` (default 10,
+  preserving old behavior for existing callers).
+- **No cross-category endpoint existed at all.** The Opportunities page was
+  explicitly designed to rank opportunities across every category together,
+  not one at a time — no single-category endpoint could serve that; the
+  frontend would've had to call `/gaps` once per category and merge
+  client-side. New: `GET /brands/:brand/opportunities`, combining both
+  lenses (`gap` — not mentioned at all; `generic_win` — recommended with no
+  specific product named, servable now that v4 makes `products` an
+  explicit array) into one list ranked by real search volume across
+  categories.
+
+**Still open, not yet resolved:** most endpoints still return flat
+`recommended_brands`/`cited_brands` string lists rather than per-product
+detail, even though the underlying data supports it since v4. Confirming
+the right response shape for that is still a real conversation to have
+with Charles, not something to assume — see `docs/openapi.yaml`'s
+description block.
+
 ## API service
 
 A standalone Express API (Railway service #3), deliberately separate from

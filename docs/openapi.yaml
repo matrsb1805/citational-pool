@@ -18,16 +18,19 @@ info:
     design, independent of that work.
 
 
-    KNOWN GAP: the underlying mentions structure supports a brand naming
-    MULTIPLE specific products in one answer (products: [{name, quote}]
-    per mention — see the Product schema). None of the endpoints below
-    currently surface that detail in their response — /brands/{brand}/gaps
-    and /categories/{category}/questions both return flat
-    recommended_brands/cited_brands string arrays only, per the original
-    design doc's contract. If Essential's UI needs per-product detail (the
-    stated point of capturing it), that's a response-shape change worth
-    confirming with Charles rather than assuming — not built yet either
-    way.
+    KNOWN GAP (partially resolved): the underlying mentions structure
+    supports a brand naming MULTIPLE specific products in one answer
+    (products: [{name, quote}] per mention — see the Product schema). Most
+    endpoints still return flat recommended_brands/cited_brands string
+    arrays rather than per-product detail — that response-shape change is
+    still open, worth confirming with Charles rather than assuming. Fixed
+    in this revision: /brands/{brand}/gaps was missing search_volume
+    despite claiming to sort by it (real feedback caught this), and
+    /brands/{brand}/competitors had a hardcoded top-10 cap with no
+    pagination, unusable for Essential's uncapped drill-down. Also new:
+    /brands/{brand}/opportunities, a cross-category endpoint that didn't
+    exist at all — the Opportunities page needs ranking across every
+    category together, which no single-category endpoint can serve.
   contact:
     name: Steve Brown
     email: steve@citational.ai
@@ -116,10 +119,15 @@ paths:
       description: >
         Only includes competitor mentions from queries where the requested
         brand was NOT itself the recommended answer — a query the merchant
-        already won doesn't surface a competitor list.
+        already won doesn't surface a competitor list. limit defaults to
+        10 (Free's summary card); pass a higher limit/offset for
+        Essential's uncapped "By Competition" tab with drill-down — real
+        feedback caught this being hardcoded with no pagination at all.
       parameters:
         - $ref: '#/components/parameters/brandPath'
         - $ref: '#/components/parameters/categoryQueryRequired'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Competitor rollup
@@ -137,7 +145,7 @@ paths:
                       properties:
                         brand:
                           type: string
-                          example: Vanicream
+                          example: AcmeGlow
                         mention_type:
                           $ref: '#/components/schemas/MentionType'
                         mentions:
@@ -166,9 +174,61 @@ paths:
                   results:
                     type: array
                     items:
-                      $ref: '#/components/schemas/QueryResultSummary'
+                      allOf:
+                        - $ref: '#/components/schemas/QueryResultSummary'
+                        - type: object
+                          properties:
+                            search_volume:
+                              type: integer
+                              nullable: true
+                              example: 2900
         '400':
           $ref: '#/components/responses/MissingCategory'
+
+  /brands/{brand}/opportunities:
+    get:
+      tags: [brands]
+      summary: Cross-category ranked opportunity list (both lenses)
+      description: >
+        Added after real feedback: no endpoint existed for the
+        Opportunities page, which was explicitly designed to rank
+        opportunities across ALL categories together, not one category at
+        a time. Combines two lenses in one ranked list: "gap" (brand not
+        mentioned at all) and "generic_win" (brand recommended, but no
+        specific product named — servable now that v4 makes products an
+        explicit array). Ranked by real search volume across both lenses
+        together, not gaps-then-wins.
+      parameters:
+        - $ref: '#/components/parameters/brandPath'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Ranked opportunity list, cross-category
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        query_text:
+                          type: string
+                        category_slug:
+                          type: string
+                          example: skincare-beauty
+                        channel:
+                          $ref: '#/components/schemas/Channel'
+                        search_volume:
+                          type: integer
+                          nullable: true
+                          example: 6600
+                        opportunity_type:
+                          type: string
+                          enum: [gap, generic_win]
 
   /categories/{category}/leaderboard:
     get:
@@ -194,7 +254,7 @@ paths:
                       properties:
                         brand:
                           type: string
-                          example: CeraVe
+                          example: NimbusSkin
                         recommendations:
                           type: integer
                           example: 14
@@ -301,7 +361,7 @@ components:
       required: true
       schema:
         type: string
-      example: CeraVe
+      example: NimbusSkin
     categoryPath:
       name: category
       in: path
@@ -350,7 +410,7 @@ components:
           type: array
           items:
             type: string
-          example: [Vanicream, La Roche-Posay]
+          example: [AcmeGlow, PureDerm]
         cited_brands:
           type: array
           items:
@@ -369,7 +429,7 @@ components:
         quote:
           type: string
           nullable: true
-          example: for very rough or bumpy skin, CeraVe SA Lotion adds gentle exfoliation
+          example: for very rough or bumpy skin, NimbusSkin SA Lotion adds gentle exfoliation
 
   responses:
     MissingCategory:
