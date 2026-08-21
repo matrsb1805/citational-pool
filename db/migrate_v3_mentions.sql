@@ -35,13 +35,12 @@ where mentions = '[]'::jsonb
     or coalesce(array_length(qr.cited_brands, 1), 0) > 0
   );
 
-alter table query_results drop column if exists recommended_brands;
-alter table query_results drop column if exists cited_brands;
-
-drop index if exists idx_results_recommended_brands;
-drop index if exists idx_results_cited_brands;
-create index if not exists idx_results_mentions on query_results using gin(mentions jsonb_path_ops);
-
+-- Redefine the view BEFORE dropping the old columns. Real failure caught
+-- in production: doing this in the other order (drop first, redefine
+-- after) fails, because Postgres won't drop a column the view's OLD
+-- definition still references — "column recommended_brands ... other
+-- objects depend on it". Redefining the view first means it no longer
+-- references those columns by the time the drop runs below.
 create or replace view brand_mentions as
 select
   qr.id           as query_result_id,
@@ -63,3 +62,10 @@ join subcategories sc on sc.id = q.subcategory_id
 join categories c on c.id = sc.category_id
 join scans s on s.id = qr.scan_id
 cross join lateral jsonb_to_recordset(qr.mentions) as m(brand text, mention_type text, product_name text, quote text);
+
+alter table query_results drop column if exists recommended_brands;
+alter table query_results drop column if exists cited_brands;
+
+drop index if exists idx_results_recommended_brands;
+drop index if exists idx_results_cited_brands;
+create index if not exists idx_results_mentions on query_results using gin(mentions jsonb_path_ops);
