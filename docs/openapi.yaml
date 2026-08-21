@@ -18,19 +18,14 @@ info:
     design, independent of that work.
 
 
-    KNOWN GAP (partially resolved): the underlying mentions structure
-    supports a brand naming MULTIPLE specific products in one answer
-    (products: [{name, quote}] per mention — see the Product schema). Most
-    endpoints still return flat recommended_brands/cited_brands string
-    arrays rather than per-product detail — that response-shape change is
-    still open, worth confirming with Charles rather than assuming. Fixed
-    in this revision: /brands/{brand}/gaps was missing search_volume
-    despite claiming to sort by it (real feedback caught this), and
-    /brands/{brand}/competitors had a hardcoded top-10 cap with no
-    pagination, unusable for Essential's uncapped drill-down. Also new:
-    /brands/{brand}/opportunities, a cross-category endpoint that didn't
-    exist at all — the Opportunities page needs ranking across every
-    category together, which no single-category endpoint can serve.
+    RESOLVED (was flagged as a known gap in the prior revision): the
+    underlying mentions structure supports a brand naming MULTIPLE
+    specific products in one answer (products: [{name, quote}] per
+    mention — see the Mention/Product schemas). QueryResultSummary
+    (used by /brands/{brand}/gaps and /categories/{category}/questions)
+    now returns the full mentions structure directly, replacing the
+    earlier flat recommended_brands/cited_brands string lists, which had
+    no way to carry per-product detail.
   contact:
     name: Steve Brown
     email: steve@citational.ai
@@ -121,8 +116,23 @@ paths:
         brand was NOT itself the recommended answer — a query the merchant
         already won doesn't surface a competitor list. limit defaults to
         10 (Free's summary card); pass a higher limit/offset for
-        Essential's uncapped "By Competition" tab with drill-down — real
-        feedback caught this being hardcoded with no pagination at all.
+        Essential's uncapped "By Competition" tab with drill-down.
+
+
+        One row per brand, not per (brand, mention_type) — real feedback
+        caught an earlier revision returning two separate rows for a
+        competitor with both recommended and cited mentions, the same
+        flattening pattern as the original brand_mentions grouping. Merged
+        server-side now, per the project's own principle that derived/
+        aggregate values shouldn't be left as a client-side grouping step.
+        The two-tone competitor bar (teal = recommended, navy = cited)
+        needs exactly this shape.
+
+
+        total_competitors reflects the true count of distinct competitor
+        brands, independent of limit/offset — same pattern as
+        /brands/{brand}/opportunities's totals, needed for a "Your rank of
+        N" display that stays correct regardless of page size.
       parameters:
         - $ref: '#/components/parameters/brandPath'
         - $ref: '#/components/parameters/categoryQueryRequired'
@@ -130,7 +140,7 @@ paths:
         - $ref: '#/components/parameters/offset'
       responses:
         '200':
-          description: Competitor rollup
+          description: Competitor rollup, one row per brand, with true total count
           content:
             application/json:
               schema:
@@ -138,6 +148,9 @@ paths:
                 properties:
                   category_slug:
                     type: string
+                  total_competitors:
+                    type: integer
+                    example: 14
                   competitors:
                     type: array
                     items:
@@ -146,11 +159,15 @@ paths:
                         brand:
                           type: string
                           example: AcmeGlow
-                        mention_type:
-                          $ref: '#/components/schemas/MentionType'
-                        mentions:
+                        recommended:
                           type: integer
-                          example: 9
+                          example: 5
+                        cited:
+                          type: integer
+                          example: 3
+                        total:
+                          type: integer
+                          example: 8
         '400':
           $ref: '#/components/responses/MissingCategory'
 
@@ -198,18 +215,40 @@ paths:
         specific product named — servable now that v4 makes products an
         explicit array). Ranked by real search volume across both lenses
         together, not gaps-then-wins.
+
+
+        total_gaps/total_generic_wins reflect the TRUE total count for
+        each type, independent of limit/offset — added after real feedback
+        caught that tab labels like "Full gaps (6)" need this explicitly;
+        counting results.length client-side breaks the moment real data
+        volume exceeds one page. Confirmed correct under pagination: with
+        limit=1, results contains 1 item but the totals still reflect the
+        full count.
+
+
+        Honest scaling note: these totals run the same underlying query
+        with no limit — fine at Phase 1's ~60 seeded questions, worth
+        revisiting (e.g. an approximate/cached count) if volume grows by
+        orders of magnitude, since an exact COUNT(*) over the full unioned
+        query on every request isn't free at real scale.
       parameters:
         - $ref: '#/components/parameters/brandPath'
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/offset'
       responses:
         '200':
-          description: Ranked opportunity list, cross-category
+          description: Ranked opportunity list, cross-category, with true totals per type
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  total_gaps:
+                    type: integer
+                    example: 6
+                  total_generic_wins:
+                    type: integer
+                    example: 2
                   results:
                     type: array
                     items:
@@ -400,22 +439,34 @@ components:
       enum: [recommended, cited]
     QueryResultSummary:
       type: object
+      description: >
+        Real feedback replaced the earlier recommended_brands/cited_brands
+        flat string lists with the full mentions structure — the previous
+        shape had no way to carry per-product detail even though the
+        underlying data supported it since v4.
       properties:
         query_text:
           type: string
           example: best moisturiser for sensitive skin
         channel:
           $ref: '#/components/schemas/Channel'
-        recommended_brands:
+        mentions:
           type: array
           items:
-            type: string
-          example: [AcmeGlow, PureDerm]
-        cited_brands:
+            $ref: '#/components/schemas/Mention'
+    Mention:
+      type: object
+      properties:
+        brand:
+          type: string
+          example: AcmeGlow
+        mention_type:
+          $ref: '#/components/schemas/MentionType'
+        products:
           type: array
+          description: Empty when the brand is named generically, with no specific product.
           items:
-            type: string
-          example: []
+            $ref: '#/components/schemas/Product'
     Product:
       type: object
       description: >

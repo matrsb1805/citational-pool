@@ -61,8 +61,7 @@ categoriesRouter.get('/:category/questions', asyncHandler(async (req, res) => {
       query_text: r.query_text,
       search_volume: r.search_volume,
       channel: r.channel,
-      recommended_brands: r.mentions.filter((m) => m.mention_type === 'recommended').map((m) => m.brand),
-      cited_brands: r.mentions.filter((m) => m.mention_type === 'cited').map((m) => m.brand),
+      mentions: r.mentions,
     })),
   });
 }));

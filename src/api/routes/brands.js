@@ -79,11 +79,18 @@ brandsRouter.get('/:brand/inclusion', asyncHandler(async (req, res) => {
 // no stored `state` column to filter on (removed in v2 for good reason);
 // this is computed per request via a NOT EXISTS check.
 //
-// limit/offset added after real feedback: this was hardcoded to top-10
-// with no pagination, which only serves Free's summary card, not
-// Essential's uncapped "By Competition" tab with drill-down. Default of 10
-// preserves the old behavior for callers that don't pass limit; Essential
-// callers can request more / paginate.
+// One row per brand, not per (brand, mention_type) — real feedback caught
+// this returning two separate rows for a competitor with both recommended
+// and cited mentions, the same flattening pattern as the original
+// brand_mentions grouping. The two-tone competitor bar (teal =
+// recommended, navy = cited) and the "8 mentions · 5 recommended, 3 cited"
+// text both need one row with both counts merged — per the project's own
+// stated principle, that merge belongs server-side, not left as a
+// client-side grouping step wherever this gets wired in.
+//
+// total_competitors: same pagination-independent-count pattern as
+// /brands/:brand/opportunities — needed for a "Your rank of N" display
+// that stays correct regardless of page size.
 // ----------------------------------------------------------------------------
 brandsRouter.get('/:brand/competitors', asyncHandler(async (req, res) => {
   const { brand } = req.params;
@@ -91,35 +98,49 @@ brandsRouter.get('/:brand/competitors', asyncHandler(async (req, res) => {
 
   if (!category) return res.status(400).json({ error: 'category is required' });
 
-  // count(distinct m.query_result_id), not count(*) — since v4, one
+  // count(distinct query_result_id), not count(*) — since v4, one
   // recommendation naming 2 products produces 2 rows in brand_mentions
   // (one per product). Counting raw rows here would inflate a competitor's
   // apparent win count based on how many products they named, not how many
-  // times they were actually recommended.
-  const { rows } = await query(
-    `select m.brand, m.mention_type, count(distinct m.query_result_id) as mentions
-     from brand_mentions m
-     where m.category_slug = $1
-       and m.brand <> $2
-       and m.query_result_id in (
-         select qr.id from query_results qr
-         where not exists (
-           select 1 from jsonb_array_elements(qr.mentions) mm
-           where mm->>'brand' = $2 and mm->>'mention_type' = 'recommended'
-         )
-       )
-     group by m.brand, m.mention_type
-     order by mentions desc
-     limit $3 offset $4`,
-    [category, brand, Number(limit), Number(offset)]
-  );
+  // times they were actually recommended. group by brand only (not brand +
+  // mention_type) is what merges recommended/cited into one row per brand.
+  const competitorsSql = `
+    select
+      m.brand,
+      count(distinct m.query_result_id) filter (where m.mention_type = 'recommended') as recommended,
+      count(distinct m.query_result_id) filter (where m.mention_type = 'cited') as cited
+    from brand_mentions m
+    where m.category_slug = $1
+      and m.brand <> $2
+      and m.query_result_id in (
+        select qr.id from query_results qr
+        where not exists (
+          select 1 from jsonb_array_elements(qr.mentions) mm
+          where mm->>'brand' = $2 and mm->>'mention_type' = 'recommended'
+        )
+      )
+    group by m.brand
+  `;
+
+  const [{ rows }, { rows: countRows }] = await Promise.all([
+    query(
+      `select brand, recommended, cited, (recommended + cited) as total
+       from (${competitorsSql}) merged
+       order by total desc
+       limit $3 offset $4`,
+      [category, brand, Number(limit), Number(offset)]
+    ),
+    query(`select count(*) as total_competitors from (${competitorsSql}) merged`, [category, brand]),
+  ]);
 
   res.json({
     category_slug: category,
+    total_competitors: Number(countRows[0].total_competitors),
     competitors: rows.map((r) => ({
       brand: r.brand,
-      mention_type: r.mention_type,
-      mentions: Number(r.mentions),
+      recommended: Number(r.recommended),
+      cited: Number(r.cited),
+      total: Number(r.total),
     })),
   });
 }));
@@ -156,21 +177,13 @@ brandsRouter.get('/:brand/gaps', asyncHandler(async (req, res) => {
       query_text: r.query_text,
       search_volume: r.search_volume,
       channel: r.channel,
-      recommended_brands: r.mentions.filter((m) => m.mention_type === 'recommended').map((m) => m.brand),
-      cited_brands: r.mentions.filter((m) => m.mention_type === 'cited').map((m) => m.brand),
+      mentions: r.mentions,
     })),
   });
 }));
 
 // ----------------------------------------------------------------------------
 // GET /brands/:brand/opportunities?limit=&offset=
-//
-// New endpoint — real feedback flagged that no cross-category endpoint
-// existed at all, needed for the Opportunities page (both lenses, per
-// earlier design direction: rank opportunities cross category and product,
-// not per-category). Without this, the frontend would have to call
-// /brands/:brand/gaps once per category and merge client-side — logic that
-// belongs server-side.
 //
 // Combines both opportunity lenses in one ranked list, across ALL
 // categories:
@@ -181,41 +194,71 @@ brandsRouter.get('/:brand/gaps', asyncHandler(async (req, res) => {
 //     explicit array to check the length of.
 // Both unioned and ranked together by real search volume, since the point
 // of this page is "biggest opportunity first," not "gaps first, then wins."
+//
+// total_gaps/total_generic_wins: real feedback caught that results.length
+// alone can't power tab labels like "Full gaps (6)" once volume grows past
+// one page — a client counting the current page would silently show the
+// wrong number. These totals run the SAME underlying query with no
+// limit/offset, so they always reflect the true count regardless of what
+// page is being viewed. Sharing opportunitiesSql between both queries (the
+// list and the counts) keeps them from silently drifting apart if the
+// logic changes later.
+//
+// Flagged honestly rather than fixed further: at real scale, computing an
+// exact COUNT(*) over the full unioned query on every request could get
+// expensive. Not a real cost at Phase 1's ~60 seeded questions — worth
+// revisiting (e.g. an approximate/cached count) if this data volume grows
+// by orders of magnitude before then.
 // ----------------------------------------------------------------------------
 brandsRouter.get('/:brand/opportunities', asyncHandler(async (req, res) => {
   const { brand } = req.params;
   const { limit = 20, offset = 0 } = req.query;
 
-  const { rows } = await query(
-    `select query_text, category_slug, channel, search_volume, opportunity_type
-     from (
-       select q.query_text, c.slug as category_slug, qr.channel, q.search_volume, 'gap' as opportunity_type
-       from query_results qr
-       join queries q on q.id = qr.query_id
-       join subcategories sc on sc.id = q.subcategory_id
-       join categories c on c.id = sc.category_id
-       where not exists (
-         select 1 from jsonb_array_elements(qr.mentions) m where m->>'brand' = $1
-       )
-       union all
-       select q.query_text, c.slug as category_slug, qr.channel, q.search_volume, 'generic_win' as opportunity_type
-       from query_results qr
-       join queries q on q.id = qr.query_id
-       join subcategories sc on sc.id = q.subcategory_id
-       join categories c on c.id = sc.category_id
-       where exists (
-         select 1 from jsonb_array_elements(qr.mentions) m
-         where m->>'brand' = $1
-           and m->>'mention_type' = 'recommended'
-           and coalesce(jsonb_array_length(m->'products'), 0) = 0
-       )
-     ) opportunities
-     order by search_volume desc nulls last
-     limit $2 offset $3`,
-    [brand, Number(limit), Number(offset)]
-  );
+  const opportunitiesSql = `
+    select q.query_text, c.slug as category_slug, qr.channel, q.search_volume, 'gap' as opportunity_type
+    from query_results qr
+    join queries q on q.id = qr.query_id
+    join subcategories sc on sc.id = q.subcategory_id
+    join categories c on c.id = sc.category_id
+    where not exists (
+      select 1 from jsonb_array_elements(qr.mentions) m where m->>'brand' = $1
+    )
+    union all
+    select q.query_text, c.slug as category_slug, qr.channel, q.search_volume, 'generic_win' as opportunity_type
+    from query_results qr
+    join queries q on q.id = qr.query_id
+    join subcategories sc on sc.id = q.subcategory_id
+    join categories c on c.id = sc.category_id
+    where exists (
+      select 1 from jsonb_array_elements(qr.mentions) m
+      where m->>'brand' = $1
+        and m->>'mention_type' = 'recommended'
+        and coalesce(jsonb_array_length(m->'products'), 0) = 0
+    )
+  `;
+
+  const [{ rows }, { rows: countRows }] = await Promise.all([
+    query(
+      `select query_text, category_slug, channel, search_volume, opportunity_type
+       from (${opportunitiesSql}) opportunities
+       order by search_volume desc nulls last
+       limit $2 offset $3`,
+      [brand, Number(limit), Number(offset)]
+    ),
+    query(
+      `select opportunity_type, count(*) as total
+       from (${opportunitiesSql}) opportunities
+       group by opportunity_type`,
+      [brand]
+    ),
+  ]);
+
+  const totals = { gap: 0, generic_win: 0 };
+  for (const r of countRows) totals[r.opportunity_type] = Number(r.total);
 
   res.json({
+    total_gaps: totals.gap,
+    total_generic_wins: totals.generic_win,
     results: rows.map((r) => ({
       query_text: r.query_text,
       category_slug: r.category_slug,

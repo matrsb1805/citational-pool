@@ -188,6 +188,46 @@ the right response shape for that is still a real conversation to have
 with Charles, not something to assume — see `docs/openapi.yaml`'s
 description block.
 
+## Changelog note — mentions in responses, and real opportunity totals
+
+Two more real fixes, verified against real Postgres:
+
+- **`QueryResultSummary` (used by `gaps` and `questions`) now returns the
+  full `mentions` structure** — `[{brand, mention_type, products}]` —
+  replacing the flat `recommended_brands`/`cited_brands` string lists. This
+  resolves the "still open" response-shape question from the previous
+  revision: per-product detail is now actually exposed, not just present
+  in the underlying data. The fix itself was trivial (`qr.mentions` was
+  already exactly this shape — just stopped decomposing it).
+- **`opportunities` now returns `total_gaps`/`total_generic_wins`**,
+  computed independently of `limit`/`offset`. Real feedback caught that a
+  client counting `results.length` for a tab label like "Full gaps (6)"
+  would silently go wrong once data exceeds one page. Confirmed correct
+  under pagination: with `limit=1`, `results` has 1 item but the totals
+  still reflect the true count (verified: 2 gaps + 1 generic win, correct
+  in both the unpaginated and `limit=1` response). Flagged honestly in the
+  spec: computing an exact count this way isn't free at real scale — fine
+  at Phase 1 volume, worth revisiting if data grows by orders of magnitude.
+
+## Changelog note — competitors merged per brand, plus a real total count
+
+Same class of bug as the opportunities fix, caught the same way — real
+review, verified against real Postgres:
+
+- **`/brands/:brand/competitors` now returns one row per brand**, not per
+  `(brand, mention_type)`. A competitor with both recommended and cited
+  mentions was coming back as two separate rows — exactly the flattening
+  pattern from the very first `brand_mentions` grouping. Merged
+  server-side (`{brand, recommended, cited, total}`), per the project's own
+  stated principle that derived/aggregate values belong server-side, not
+  left as a client-side grouping step. Verified: a brand with 1 recommended
+  + 1 cited mention now returns as a single row (`recommended: 1, cited: 1,
+  total: 2`), confirmed alongside two other brands that only have one
+  mention type each, to make sure the merge doesn't break the simple case.
+- **`total_competitors` added**, same pagination-independent pattern as
+  `opportunities`'s totals — confirmed staying correct (`3`) even when
+  `limit=1` shrinks the actual result list to one item.
+
 ## API service
 
 A standalone Express API (Railway service #3), deliberately separate from
