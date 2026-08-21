@@ -228,6 +228,24 @@ review, verified against real Postgres:
   `opportunities`'s totals — confirmed staying correct (`3`) even when
   `limit=1` shrinks the actual result list to one item.
 
+## Changelog note — merchant's own row in the competitor leaderboard
+
+Real feedback caught a precise, easy-to-miss gap: even with the merge fix
+above, `/competitors` was still competitor-only — the merchant's own brand
+had no way to appear in its own leaderboard, ranked alongside competitors
+and tagged "· You." Fixed: the response now includes the brand's own row
+(`is_brand: true`), computed with a genuinely separate, ungated query
+(every appearance of the brand counts, unlike competitor rows, which
+exclude queries the brand already won). Verified against a real Postgres
+test engineered so the brand's own rank lands in the *middle* of the pack,
+including the trickiest edge case: a query where the brand both won AND a
+competitor was cited in the same result — confirmed the competitor's
+mention is correctly excluded from its gated tally while that same query
+correctly counts toward the brand's own ungated total. Pagination
+(`offset=1, limit=1`) confirmed landing exactly on the brand's row when
+that's where it ranks. `total_competitors` deliberately excludes the
+brand's own row — "rank of N" means N competitors, not N-1.
+
 ## API service
 
 A standalone Express API (Railway service #3), deliberately separate from

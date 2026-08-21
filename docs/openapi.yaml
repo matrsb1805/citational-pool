@@ -123,16 +123,28 @@ paths:
         caught an earlier revision returning two separate rows for a
         competitor with both recommended and cited mentions, the same
         flattening pattern as the original brand_mentions grouping. Merged
-        server-side now, per the project's own principle that derived/
+        server-side, per the project's own principle that derived/
         aggregate values shouldn't be left as a client-side grouping step.
         The two-tone competitor bar (teal = recommended, navy = cited)
         needs exactly this shape.
 
 
-        total_competitors reflects the true count of distinct competitor
-        brands, independent of limit/offset — same pattern as
-        /brands/{brand}/opportunities's totals, needed for a "Your rank of
-        N" display that stays correct regardless of page size.
+        The merchant's OWN row is included in this same ranked list,
+        tagged is_brand: true, computed with its own UNGATED tally (every
+        appearance counts — unlike competitor rows, which only include
+        queries the merchant didn't already win). This lets "the
+        merchant's own leaderboard, ranked alongside competitors" actually
+        render — a competitor-only rollup can't. The own row is always
+        present regardless of page, since the merchant needs to find
+        themselves ranked correctly even if that's off the current page —
+        this requires fetching, merging, and sorting the full competitor
+        set server-side before paginating (fine at Phase 1 volume; worth
+        SQL-side pagination via a window function if this grows large).
+
+
+        total_competitors deliberately does NOT include the brand's own
+        row — "rank of N" means N competitors, not N-1 after counting
+        yourself.
       parameters:
         - $ref: '#/components/parameters/brandPath'
         - $ref: '#/components/parameters/categoryQueryRequired'
@@ -168,6 +180,10 @@ paths:
                         total:
                           type: integer
                           example: 8
+                        is_brand:
+                          type: boolean
+                          description: True for the merchant's own row, ranked in the same list as competitors.
+                          example: false
         '400':
           $ref: '#/components/responses/MissingCategory'
 

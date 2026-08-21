@@ -73,24 +73,37 @@ brandsRouter.get('/:brand/inclusion', asyncHandler(async (req, res) => {
 // GET /brands/:brand/competitors?category=...&limit=&offset=
 //
 // Gating rule (per Charles's original design, corrected for the v3 schema
-// in the API Design Doc v1.1 revision): only surface competitors for
-// queries where :brand was NOT itself the recommended answer — a query the
-// merchant already won doesn't need a "who else showed up" list. There's
-// no stored `state` column to filter on (removed in v2 for good reason);
-// this is computed per request via a NOT EXISTS check.
+// in the API Design Doc v1.1 revision): only surface COMPETITOR mentions
+// from queries where the requested brand was NOT itself the recommended
+// answer — a query the merchant already won doesn't need a "who else
+// showed up" list. There's no stored `state` column to filter on (removed
+// in v2 for good reason); this is computed per request via a NOT EXISTS
+// check.
 //
-// One row per brand, not per (brand, mention_type) — real feedback caught
-// this returning two separate rows for a competitor with both recommended
-// and cited mentions, the same flattening pattern as the original
-// brand_mentions grouping. The two-tone competitor bar (teal =
-// recommended, navy = cited) and the "8 mentions · 5 recommended, 3 cited"
-// text both need one row with both counts merged — per the project's own
-// stated principle, that merge belongs server-side, not left as a
-// client-side grouping step wherever this gets wired in.
+// One row per brand, not per (brand, mention_type) — merged server-side,
+// per the project's own stated principle that derived aggregates aren't a
+// client-side job. The two-tone competitor bar (teal = recommended, navy =
+// cited) needs exactly this shape.
 //
-// total_competitors: same pagination-independent-count pattern as
-// /brands/:brand/opportunities — needed for a "Your rank of N" display
-// that stays correct regardless of page size.
+// The merchant's OWN row is included in the same ranked list, tagged
+// `is_brand: true` — real feedback caught that a competitor-only rollup
+// can't render "the merchant's own leaderboard" (which needs their own row
+// ranked alongside competitors, not gated the way competitor rows are:
+// every one of the brand's own appearances counts, not just the ones where
+// a competitor also showed up). Computed as a genuinely separate, ungated
+// query — the gating logic above exists specifically to answer "who's
+// beating me," which doesn't apply to the brand's own tally.
+//
+// Own row is always present regardless of page (so the merchant can find
+// themselves ranked correctly even off the current page), which means the
+// full competitor set has to be fetched, merged with the own row, sorted,
+// and THEN paginated in application code — not paginated in SQL first.
+// Honest scaling note, same as /opportunities: fine at Phase 1 volume,
+// worth revisiting (e.g. SQL-side pagination with a window function) if
+// the competitor set per category grows large.
+//
+// total_competitors deliberately does NOT include the brand's own row —
+// "rank of N" means N competitors, not N-1 after counting yourself.
 // ----------------------------------------------------------------------------
 brandsRouter.get('/:brand/competitors', asyncHandler(async (req, res) => {
   const { brand } = req.params;
@@ -122,26 +135,62 @@ brandsRouter.get('/:brand/competitors', asyncHandler(async (req, res) => {
     group by m.brand
   `;
 
-  const [{ rows }, { rows: countRows }] = await Promise.all([
+  const [{ rows: competitorRows }, { rows: ownRows }] = await Promise.all([
     query(
       `select brand, recommended, cited, (recommended + cited) as total
        from (${competitorsSql}) merged
-       order by total desc
-       limit $3 offset $4`,
-      [category, brand, Number(limit), Number(offset)]
+       order by total desc`,
+      [category, brand]
     ),
-    query(`select count(*) as total_competitors from (${competitorsSql}) merged`, [category, brand]),
+    // Ungated, category-wide tally for the brand's own row — deliberately
+    // NOT reusing competitorsSql, since that query's whole purpose is
+    // excluding queries the brand already won. Every appearance of the
+    // brand's own mention counts here, recommended or cited.
+    query(
+      `select
+         count(distinct qr.id) filter (
+           where exists (select 1 from jsonb_array_elements(qr.mentions) m where m->>'brand' = $2 and m->>'mention_type' = 'recommended')
+         ) as recommended,
+         count(distinct qr.id) filter (
+           where exists (select 1 from jsonb_array_elements(qr.mentions) m where m->>'brand' = $2 and m->>'mention_type' = 'cited')
+         ) as cited
+       from query_results qr
+       join queries q on q.id = qr.query_id
+       join subcategories sc on sc.id = q.subcategory_id
+       join categories c on c.id = sc.category_id
+       where c.slug = $1`,
+      [category, brand]
+    ),
   ]);
 
-  res.json({
-    category_slug: category,
-    total_competitors: Number(countRows[0].total_competitors),
-    competitors: rows.map((r) => ({
+  const totalCompetitors = competitorRows.length;
+
+  const ownRecommended = Number(ownRows[0]?.recommended || 0);
+  const ownCited = Number(ownRows[0]?.cited || 0);
+
+  const merged = [
+    ...competitorRows.map((r) => ({
       brand: r.brand,
       recommended: Number(r.recommended),
       cited: Number(r.cited),
       total: Number(r.total),
+      is_brand: false,
     })),
+    {
+      brand,
+      recommended: ownRecommended,
+      cited: ownCited,
+      total: ownRecommended + ownCited,
+      is_brand: true,
+    },
+  ].sort((a, b) => b.total - a.total);
+
+  const paged = merged.slice(Number(offset), Number(offset) + Number(limit));
+
+  res.json({
+    category_slug: category,
+    total_competitors: totalCompetitors,
+    competitors: paged,
   });
 }));
 
