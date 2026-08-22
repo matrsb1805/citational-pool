@@ -9,6 +9,7 @@ import { queryGoogleAiMode } from './lib/channels/googleAiMode.js';
 import { queryChatGPT } from './lib/channels/chatgpt.js';
 import { queryPerplexity } from './lib/channels/perplexity.js';
 import { classifyResult } from './lib/classify.js';
+import { incrementScanProgress } from './lib/scans.js';
 
 const CHANNEL_FNS = {
   google_ai_mode: queryGoogleAiMode,
@@ -67,10 +68,21 @@ const worker = new Worker(SCAN_QUEUE_NAME, processJob, {
 
 worker.on('completed', (job) => {
   console.log(`[worker] completed ${job.id}`);
+  incrementScanProgress(job.data.scanId).catch((err) =>
+    console.error(`[worker] failed to update scan progress: ${err.message}`)
+  );
 });
 
 worker.on('failed', (job, err) => {
   console.error(`[worker] failed ${job?.id}: ${err.message}`);
+  // BullMQ fires 'failed' after EVERY failed attempt, not just the last
+  // one — only count it as settled once retries are exhausted, or the
+  // scan could complete before a job that's about to retry has finished.
+  if (job && job.attemptsMade >= job.opts.attempts) {
+    incrementScanProgress(job.data.scanId).catch((err2) =>
+      console.error(`[worker] failed to update scan progress: ${err2.message}`)
+    );
+  }
 });
 
 console.log('[worker] listening for scan jobs...');

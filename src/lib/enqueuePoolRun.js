@@ -34,9 +34,11 @@ export async function enqueuePoolRun({ dryRun = false, maxQueries = 0 } = {}) {
       continue;
     }
 
-    if (capped.length === 0) continue;
+       if (capped.length === 0) continue;
 
-    const scanId = await createPoolScan(category.id);
+    const jobsForThisScan = capped.length * CHANNELS.length;
+    const scanId = await createPoolScan(category.id, jobsForThisScan);
+
 
     for (const q of capped) {
       for (const channel of CHANNELS) {

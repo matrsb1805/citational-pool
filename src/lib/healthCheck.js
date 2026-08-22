@@ -19,6 +19,10 @@ const ERROR_RATE_THRESHOLD = 0.2; // 20% — well above normal transient
 // rate-limit retries, which usually succeed on retry and don't end up as
 // a stored error at all.
 
+const STALE_SCAN_HOURS = 6; // generous margin above how long a real scan
+// run should ever take, so a scan legitimately still in progress doesn't
+// false-positive.
+
 export async function runHealthCheck() {
   const issues = [];
 
@@ -50,6 +54,20 @@ export async function runHealthCheck() {
           `(${Math.round(errorRate * 100)}%, threshold is ${Math.round(ERROR_RATE_THRESHOLD * 100)}%) — worth checking the logs.`
       );
     }
+  }
+
+    const { rows: staleScanRows } = await query(
+    `select id, category_id, started_at from scans
+     where status = 'running'
+       and started_at < now() - interval '${STALE_SCAN_HOURS} hours'
+     order by started_at asc`
+  );
+  if (staleScanRows.length > 0) {
+    issues.push(
+      `${staleScanRows.length} scan(s) stuck in 'running' for more than ${STALE_SCAN_HOURS} hours ` +
+        `— likely a scan that never received its completion signal. Oldest: ${staleScanRows[0].id} ` +
+        `started ${staleScanRows[0].started_at}.`
+    );
   }
 
   return issues;
