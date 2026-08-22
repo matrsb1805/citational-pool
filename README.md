@@ -270,6 +270,43 @@ available outside the deployed environment. Spot-check the next real batch
 against `raw_response` the same way every revision of this file has been
 checked, rather than assuming this is bulletproof on faith.
 
+## Alerting
+
+Two independent pieces, added after realizing the worker/scheduler run
+unattended for weeks with zero visibility into silent failures:
+
+**1. Railway's own deploy-failure webhook (free, built-in, catches build/deploy problems)**
+
+In Railway: `citational-pool` (API service) → Settings → Webhooks → add a
+webhook URL:
+```
+https://<your-api-domain>/internal/railway-webhook?secret=<RAILWAY_WEBHOOK_SECRET value>
+```
+Real limitation, confirmed via Railway's own community/docs: this only
+covers *deploy-time* failures. If the worker crashes hours into a run
+*after* a successful deploy, Railway silently restarts it with no
+notification — which is exactly what piece 2 exists to catch.
+
+**2. A periodic health check** (`src/lib/healthCheck.js`, run by the
+scheduler every `HEALTH_CHECK_CRON`, default every 6 hours), watching for
+two things Railway genuinely can't see:
+- No `query_results` written in the last 30 hours (worker/scheduler may
+  have silently died)
+- More than 20% of results in the last 24 hours have an `error` (something
+  systemic, not just normal transient retries)
+
+Deliberately alerts only when something's actually wrong, not on a
+schedule — a "still fine" email every 6 hours would get ignored within a
+week. Tested against real Postgres across three scenarios (empty database,
+healthy data, and an artificially elevated error rate) — all three
+detected correctly.
+
+**Both send email via Resend** (`src/lib/email.js`) — free tier, no setup
+cost. **Honest limitation**: unlike the SQL-side logic, the actual email
+sending couldn't be verified end-to-end in this build session — no real
+Resend credentials available outside the deployed environment. Send one
+real test alert after deploying to confirm.
+
 ## API service
 
 A standalone Express API (Railway service #3), deliberately separate from
