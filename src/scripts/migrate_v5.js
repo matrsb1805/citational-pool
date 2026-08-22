@@ -10,12 +10,12 @@ import { pool } from '../lib/db.js';
 async function migrate() {
   console.log('[migrate:v5] adding total_jobs / completed_jobs to scans...');
 
-  await query(`
+  await pool.query(`
     alter table scans
     add column if not exists total_jobs integer
   `);
 
-  await query(`
+  await pool.query(`
     alter table scans
     add column if not exists completed_jobs integer not null default 0
   `);
