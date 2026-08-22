@@ -234,70 +234,126 @@ brandsRouter.get('/:brand/gaps', asyncHandler(async (req, res) => {
 // ----------------------------------------------------------------------------
 // GET /brands/:brand/opportunities?limit=&offset=
 //
-// Combines both opportunity lenses in one ranked list, across ALL
-// categories:
-//   - "gap": the brand doesn't appear at all for this question
-//   - "generic_win": the brand IS recommended, but with no specific
-//     product named (products: []) — the "generic win" lens from Charles's
-//     Data Dependencies doc, now servable since v4 makes products an
-//     explicit array to check the length of.
-// Both unioned and ranked together by real search volume, since the point
-// of this page is "biggest opportunity first," not "gaps first, then wins."
+// v2 of this endpoint — real bugs found in production once the pool moved
+// to daily cadence, none of which showed up in the original testing
+// (which only ever had one scan's worth of data per category):
 //
-// total_gaps/total_generic_wins: real feedback caught that results.length
-// alone can't power tab labels like "Full gaps (6)" once volume grows past
-// one page — a client counting the current page would silently show the
-// wrong number. These totals run the SAME underlying query with no
-// limit/offset, so they always reflect the true count regardless of what
-// page is being viewed. Sharing opportunitiesSql between both queries (the
-// list and the counts) keeps them from silently drifting apart if the
-// logic changes later.
+// 1. NO RECENCY SCOPING (real bug, now fixed). The original query
+//    aggregated across EVERY historical scan for a category, not just the
+//    latest. With daily scans accumulating, the same question could
+//    appear as a "gap" on one day's scan and a "generic_win" on another —
+//    both individually correct for their own scan, but nonsensical shown
+//    together as if both were current. Fixed via a `latest_scans` CTE:
+//    only the most recent completed scan per category counts.
 //
-// Flagged honestly rather than fixed further: at real scale, computing an
-// exact COUNT(*) over the full unioned query on every request could get
-// expensive. Not a real cost at Phase 1's ~60 seeded questions — worth
-// revisiting (e.g. an approximate/cached count) if this data volume grows
-// by orders of magnitude before then.
+// 2. ONE ROW PER QUESTION, NOT PER (QUESTION, CHANNEL) (real feedback).
+//    A question checked across 3 channels used to produce up to 3 rows.
+//    Now aggregated server-side, per the same principle already applied to
+//    /competitors and /categories/*/leaderboard (derived aggregates are a
+//    server job, not a client one):
+//      - opportunity_type = 'gap' only when EVERY channel shows the brand
+//        as not_listed for that question.
+//      - opportunity_type = 'generic_win' when at least one channel shows
+//        the brand recommended with NO specific product, and NO channel
+//        shows a specific-product recommendation (a real specific-product
+//        win anywhere disqualifies it as an "opportunity").
+//      - Anything else (mixed states that don't cleanly fit either lens)
+//        is excluded from this list entirely, rather than forced into one
+//        category.
+//    FLAGGING AS A DECISION, NOT A CERTAINTY: the "full gap = every
+//    channel not_listed" definition came directly from the bug report.
+//    The generic_win cross-channel definition above is a reasonable
+//    extrapolation of the same logic, not something explicitly specified —
+//    worth Charles's team confirming this matches their actual intent.
+//
+// One consequence of aggregating to one row per question: `channel` no
+// longer appears in each result (a single row can span multiple channels
+// with different per-channel states) — a real response-shape change, not
+// an oversight. A separately-reported "channel/category_slug scrambled"
+// bug did NOT reproduce on code review of the previous version (the old
+// UNION's column order matched between both branches) — this rewrite
+// removes the `channel` field from the output entirely either way, which
+// should sidestep that symptom regardless of its original cause. Flagged
+// honestly: if it resurfaces, it needs its own fresh diagnosis against a
+// real raw response, not assumed fixed by this change.
 // ----------------------------------------------------------------------------
 brandsRouter.get('/:brand/opportunities', asyncHandler(async (req, res) => {
   const { brand } = req.params;
   const { limit = 20, offset = 0 } = req.query;
 
-  const opportunitiesSql = `
-    select q.query_text, c.slug as category_slug, qr.channel, q.search_volume, 'gap' as opportunity_type
-    from query_results qr
-    join queries q on q.id = qr.query_id
-    join subcategories sc on sc.id = q.subcategory_id
-    join categories c on c.id = sc.category_id
-    where not exists (
-      select 1 from jsonb_array_elements(qr.mentions) m where m->>'brand' = $1
+  // Shared CTE structure between the results query and the totals query,
+  // same reasoning as before: keeps them from silently drifting apart.
+  const opportunitiesCte = `
+    with latest_scans as (
+      select distinct on (s.category_id) s.id as scan_id, s.category_id
+      from scans s
+      where s.status = 'complete'
+      order by s.category_id, s.started_at desc
+    ),
+    per_channel_state as (
+      select
+        q.id as query_id,
+        q.query_text,
+        c.slug as category_slug,
+        q.search_volume,
+        qr.channel,
+        case
+          when exists (
+            select 1 from jsonb_array_elements(qr.mentions) m
+            where m->>'brand' = $1
+              and m->>'mention_type' = 'recommended'
+              and coalesce(jsonb_array_length(m->'products'), 0) > 0
+          ) then 'specific'
+          when exists (
+            select 1 from jsonb_array_elements(qr.mentions) m
+            where m->>'brand' = $1 and m->>'mention_type' = 'recommended'
+          ) then 'generic'
+          when exists (
+            select 1 from jsonb_array_elements(qr.mentions) m
+            where m->>'brand' = $1 and m->>'mention_type' = 'cited'
+          ) then 'cited'
+          else 'not_listed'
+        end as state
+      from query_results qr
+      join latest_scans ls on ls.scan_id = qr.scan_id
+      join queries q on q.id = qr.query_id
+      join subcategories sc on sc.id = q.subcategory_id
+      join categories c on c.id = sc.category_id
+    ),
+    per_question as (
+      select
+        query_id,
+        query_text,
+        category_slug,
+        search_volume,
+        bool_and(state = 'not_listed') as is_full_gap,
+        bool_or(state = 'generic') as has_generic,
+        bool_or(state = 'specific') as has_specific
+      from per_channel_state
+      group by query_id, query_text, category_slug, search_volume
     )
-    union all
-    select q.query_text, c.slug as category_slug, qr.channel, q.search_volume, 'generic_win' as opportunity_type
-    from query_results qr
-    join queries q on q.id = qr.query_id
-    join subcategories sc on sc.id = q.subcategory_id
-    join categories c on c.id = sc.category_id
-    where exists (
-      select 1 from jsonb_array_elements(qr.mentions) m
-      where m->>'brand' = $1
-        and m->>'mention_type' = 'recommended'
-        and coalesce(jsonb_array_length(m->'products'), 0) = 0
-    )
+    select
+      query_id,
+      query_text,
+      category_slug,
+      search_volume,
+      case
+        when is_full_gap then 'gap'
+        when has_generic and not has_specific then 'generic_win'
+      end as opportunity_type
+    from per_question
+    where is_full_gap or (has_generic and not has_specific)
   `;
 
   const [{ rows }, { rows: countRows }] = await Promise.all([
     query(
-      `select query_text, category_slug, channel, search_volume, opportunity_type
-       from (${opportunitiesSql}) opportunities
+      `${opportunitiesCte}
        order by search_volume desc nulls last
        limit $2 offset $3`,
       [brand, Number(limit), Number(offset)]
     ),
     query(
-      `select opportunity_type, count(*) as total
-       from (${opportunitiesSql}) opportunities
-       group by opportunity_type`,
+      `select opportunity_type, count(*) as total from (${opportunitiesCte}) t group by opportunity_type`,
       [brand]
     ),
   ]);
@@ -311,7 +367,6 @@ brandsRouter.get('/:brand/opportunities', asyncHandler(async (req, res) => {
     results: rows.map((r) => ({
       query_text: r.query_text,
       category_slug: r.category_slug,
-      channel: r.channel,
       search_volume: r.search_volume,
       opportunity_type: r.opportunity_type,
     })),

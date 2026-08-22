@@ -221,39 +221,54 @@ paths:
   /brands/{brand}/opportunities:
     get:
       tags: [brands]
-      summary: Cross-category ranked opportunity list (both lenses)
+      summary: Cross-category ranked opportunity list (both lenses), one row per question
       description: >
-        Added after real feedback: no endpoint existed for the
-        Opportunities page, which was explicitly designed to rank
-        opportunities across ALL categories together, not one category at
-        a time. Combines two lenses in one ranked list: "gap" (brand not
-        mentioned at all) and "generic_win" (brand recommended, but no
-        specific product named — servable now that v4 makes products an
-        explicit array). Ranked by real search volume across both lenses
-        together, not gaps-then-wins.
+        v2 — real bugs fixed after the pool moved to daily cadence, none of
+        which showed up in original testing (only one scan's worth of data
+        existed then). Two fixes:
+
+
+        (1) Recency scoping. Every result now comes ONLY from the most
+        recent completed scan per category — the original version
+        aggregated across every historical scan, which could show the same
+        question as both a gap (an older scan) and a generic_win (a newer
+        scan) at once, and produced duplicate-looking rows once daily
+        scans accumulated history.
+
+
+        (2) One row per QUESTION, not per (question, channel) — aggregated
+        server-side, same principle already applied to /competitors and
+        the leaderboard. opportunity_type = "gap" only when EVERY channel
+        shows the brand as not_listed for that question. opportunity_type
+        = "generic_win" when at least one channel shows the brand
+        recommended with no specific product AND no channel shows a
+        specific-product recommendation (a real product-level win anywhere
+        excludes the question from this list entirely — flagging this
+        generic_win definition as a reasonable extrapolation from the bug
+        report's explicit "full gap" definition, not something separately
+        confirmed).
+
+
+        channel no longer appears in each result, since one row can now
+        span multiple channels with different per-channel states — a real
+        response-shape change from v1, not an oversight.
 
 
         total_gaps/total_generic_wins reflect the TRUE total count for
-        each type, independent of limit/offset — added after real feedback
-        caught that tab labels like "Full gaps (6)" need this explicitly;
-        counting results.length client-side breaks the moment real data
-        volume exceeds one page. Confirmed correct under pagination: with
-        limit=1, results contains 1 item but the totals still reflect the
-        full count.
+        each type, independent of limit/offset. Confirmed correct under
+        pagination.
 
 
-        Honest scaling note: these totals run the same underlying query
-        with no limit — fine at Phase 1's ~60 seeded questions, worth
-        revisiting (e.g. an approximate/cached count) if volume grows by
-        orders of magnitude, since an exact COUNT(*) over the full unioned
-        query on every request isn't free at real scale.
+        Honest scaling note, unchanged from v1: these totals run the same
+        underlying query with no limit — fine at Phase 1's ~60 seeded
+        questions, worth revisiting if volume grows by orders of magnitude.
       parameters:
         - $ref: '#/components/parameters/brandPath'
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/offset'
       responses:
         '200':
-          description: Ranked opportunity list, cross-category, with true totals per type
+          description: Ranked opportunity list, cross-category, one row per question, with true totals per type
           content:
             application/json:
               schema:
@@ -275,8 +290,6 @@ paths:
                         category_slug:
                           type: string
                           example: skincare-beauty
-                        channel:
-                          $ref: '#/components/schemas/Channel'
                         search_volume:
                           type: integer
                           nullable: true
