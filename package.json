@@ -13,6 +13,7 @@
     "migrate:v2": "node src/scripts/migrate_v2.js",
     "migrate:v3": "node src/scripts/migrate_v3.js",
     "migrate:v4": "node src/scripts/migrate_v4.js",
+    "migrate:v5": "node src/scripts/migrate.v5.js",
     "dedupe": "node src/scripts/dedupe.js",
     "search-volume": "node src/scripts/fetchSearchVolume.js",
     "api": "node src/api/server.js"
