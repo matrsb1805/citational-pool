@@ -30,8 +30,8 @@ info:
     name: Steve Brown
     email: steve@citational.ai
 servers:
-  - url: https://citational-pool-api.up.railway.app
-    description: Production (Railway) — exact hostname TBD once deployed
+  - url: https://citational-api-production.up.railway.app
+    description: Production (Railway) — confirmed live via /health
   - url: http://localhost:3000
     description: Local dev
 
