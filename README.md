@@ -246,6 +246,30 @@ correctly counts toward the brand's own ungated total. Pagination
 that's where it ranks. `total_competitors` deliberately excludes the
 brand's own row — "rank of N" means N competitors, not N-1.
 
+## Changelog note — classification rewritten to use tool-calling (v5)
+
+A real production failure exposed a second, genuinely different JSON
+parsing bug beyond the markdown-fence issue fixed earlier: a transcript
+containing a nested quoted word (the AI's own answer said `Choosing a
+"micronized" version...`) produced text with unescaped inner quotes when
+the model tried to reproduce it verbatim inside a JSON string, breaking
+`JSON.parse`. Patching the text parser further isn't a durable fix — there's
+no reliable way to regex-repair arbitrary broken quoting after the fact.
+
+Fixed properly: `classify.js` now uses Claude's structured tool-calling
+(`tools` + `tool_choice`) instead of asking the model to write JSON as
+plain text. The API returns the extracted data as an already-parsed object
+on the `tool_use` block — there's no text for the model to malform in
+transit, which eliminates this entire category of bug (both this one and
+the earlier code-fence issue), not just this specific instance of it.
+
+**Honest limitation on this fix specifically**: unlike every database-side
+fix in this project, this one couldn't be verified end-to-end locally — it
+needs a real `ANTHROPIC_API_KEY` to actually call the API, which isn't
+available outside the deployed environment. Spot-check the next real batch
+against `raw_response` the same way every revision of this file has been
+checked, rather than assuming this is bulletproof on faith.
+
 ## API service
 
 A standalone Express API (Railway service #3), deliberately separate from
